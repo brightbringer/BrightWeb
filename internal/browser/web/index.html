@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrightWeb — Navegador da Internet Óptica em Vídeos</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/i18n.js"></script>
+</head>
+<body>
+  <div class="browser-shell">
+    <!-- BARRA DE ABAS -->
+    <header class="tab-bar">
+      <div class="brand-chip"><img src="/favicon.png" class="brand-ico" alt="BrightWeb"> BrightWeb</div>
+      <div id="tabs-strip" class="tabs-strip"></div>
+      <button type="button" class="tab-new" id="btn-new-tab" title="Nova aba (Ctrl+T)">＋</button>
+      <button type="button" class="ver-pill" id="bw-update-btn" title="Versão do BrightWeb — clique para verificar ou atualizar pelo GitHub">v0.7</button>
+    </header>
+
+    <!-- BARRA DE NAVEGAÇÃO & ENDEREÇO -->
+    <div class="nav-bar">
+      <button type="button" class="nav-btn" id="btn-back" title="Voltar" disabled>←</button>
+      <button type="button" class="nav-btn" id="btn-fwd" title="Avançar" disabled>→</button>
+      <button type="button" class="nav-btn" id="btn-reload" title="Recarregar (forçar nova decodificação)">↻</button>
+      <button type="button" class="nav-btn" id="btn-home" title="Página Inicial">🏠</button>
+
+      <form id="address-form" class="omni-wrap">
+        <span id="omni-badge" class="omni-badge">btweb://</span>
+        <input type="text" id="address-input" autocomplete="off" spellcheck="false" data-i18n-ph="omni_ph"
+          placeholder="Cole link(s) do YouTube, btweb://ID1+ID2+ID3+ID4 (multi-vídeo) ou .mp4 local...">
+        <button type="submit" class="omni-go" data-i18n="btn_go" title="Abrir site óptico">Ir</button>
+      </form>
+
+      <button type="button" class="nav-btn" id="btn-open-local" title="Abrir arquivo de vídeo local (.mp4 / .mkv / .webm)">📁</button>
+      <button type="button" class="nav-btn" id="btn-bookmark" title="Salvar/Remover dos Favoritos">☆</button>
+      <button type="button" class="nav-pill active" id="btn-isolated" data-i18n="btn_isolated" title="Modo Isolado White-Hat: bloqueia conexões externas (CSP) para impedir vazamento de IP">🛡️ Isolado</button>
+      <button type="button" class="nav-pill" id="btn-inspector" data-i18n="btn_inspector" title="Abrir Inspetor Óptico (Codec, FEC, Arquivos, SHA-256)">🔬 Inspetor</button>
+      <button type="button" class="nav-pill primary" id="btn-open-publish" data-i18n="btn_publish">📦 Publicar Site</button>
+      <button type="button" class="nav-btn" id="btn-bw-settings" title="Tema & Idioma">⚙️</button>
+    </div>
+
+    <!-- ÁREA PRINCIPAL (VIEWPORT DA ABA + INSPETOR ÓPTICO LATERAL) -->
+    <div class="browser-main">
+      <main class="viewport" id="viewport">
+        <!-- HOME PAGE (EXIBIDA EM ABAS VAZIAS) -->
+        <section id="view-home" class="home-view">
+          <div class="home-hero">
+            <div class="home-badge" data-i18n="home_badge">PROJETO EDUCACIONAL WHITE-HAT · PROTOCOLO BTWEB://</div>
+            <h1 data-i18n="home_title">☀️ BrightWeb — A Internet dentro de Vídeos</h1>
+            <p data-i18n="home_desc">Digite ou cole qualquer link de vídeo (ou .mp4 local) na barra acima. O BrightWeb decodifica o brilho das partículas em tempo real, verifica a integridade SHA-256 e renderiza o site completo na RAM dentro de um sandbox isolado.</p>
+            <div class="home-actions">
+              <button type="button" class="btn primary" id="btn-home-demo" data-i18n="btn_demo">⚡ Criar &amp; Abrir Site Demo (Vídeo Fractal)</button>
+              <button type="button" class="btn" id="btn-home-publish" data-i18n="btn_home_pub">📦 Transformar Meu Site em Vídeo</button>
+              <button type="button" class="btn" id="btn-home-local" data-i18n="btn_home_local">📁 Abrir Vídeo .mp4 Local</button>
+            </div>
+          </div>
+
+          <div class="home-grid">
+            <div class="home-card">
+              <h3 data-i18n="card_bookmarks">⭐ Favoritos Ópticos</h3>
+              <div id="home-bookmarks" class="link-list"></div>
+            </div>
+            <div class="home-card">
+              <h3 data-i18n="card_history">🕘 Histórico Recente</h3>
+              <div id="home-history" class="link-list"></div>
+            </div>
+            <div class="home-card">
+              <h3 data-i18n="card_how">🔬 Como Funciona</h3>
+              <ul class="info-list">
+                <li><b>Protocolo <code>btweb://VIDEO_ID</code>:</b> sites podem conter links para outros vídeos e navegar entre si como uma web real.</li>
+                <li><b>Dois modos:</b> <b>Aberto</b> (<code>YTWB001</code>, sem senha) ou <b>Criptografado Pós-Quântico</b> (<code>YTPUB001</code>, 1 a 5 senhas em cascata).</li>
+                <li><b>Sandbox White-Hat:</b> <code>iframe</code> sem <code>allow-same-origin</code> + <b>CSP Offline</b> bloqueando qualquer vazamento de IP externo.</li>
+                <li><b>Ferramentas detectadas:</b> <span id="home-tools-status" class="muted">verificando...</span></li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- TELA DE DECODIFICAÇÃO AO VIVO -->
+        <section id="view-loading" class="state-view hidden">
+          <div class="state-card">
+            <div class="spinner"></div>
+            <h2 id="load-title">Decodificando vídeo óptico...</h2>
+            <p id="load-detail" class="muted">Iniciando...</p>
+            <div class="prog-track"><div class="prog-fill" id="load-bar" style="width:0%"></div></div>
+            <div class="prog-meta"><span id="load-pct">0%</span><span id="load-extra" class="muted"></span></div>
+          </div>
+        </section>
+
+        <!-- TELA DE DESBLOQUEIO POR SENHA (YTPUB001) -->
+        <section id="view-locked" class="state-view hidden">
+          <div class="state-card">
+            <div class="lock-ico">🔒</div>
+            <h2>Site Óptico Criptografado</h2>
+            <p id="lock-desc" class="muted">Este vídeo usa criptografia em cascata Pós-Quântica (Argon2id + AES-256-GCM + XChaCha20-Poly1305).</p>
+            <div id="lock-pw-list" class="pw-stack"></div>
+            <div id="lock-error" class="err-box hidden"></div>
+            <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+              <button type="button" class="btn" id="btn-lock-toggle">👁️ Mostrar/Ocultar</button>
+              <button type="button" class="btn primary" id="btn-lock-unlock">🔓 Desbloquear &amp; Abrir Site</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- TELA DE ERRO -->
+        <section id="view-error" class="state-view hidden">
+          <div class="state-card">
+            <div class="lock-ico">⚠️</div>
+            <h2>Não foi possível abrir este vídeo como site</h2>
+            <p id="err-detail" class="err-box" style="margin-top:10px"></p>
+            <div style="margin-top:14px;display:flex;gap:8px;justify-content:center">
+              <button type="button" class="btn" id="btn-err-home">🏠 Início</button>
+              <button type="button" class="btn primary" id="btn-err-retry">↻ Tentar Novamente</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- SANDBOXED IFRAME RENDERING THE DECODED OPTICAL WEBSITE -->
+        <iframe id="site-frame" class="site-frame hidden"
+          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock"
+          allow="autoplay; fullscreen; gamepad"
+          referrerpolicy="no-referrer"></iframe>
+      </main>
+
+      <!-- INSPETOR ÓPTICO LATERAL (TELEMETRIA PARA PESQUISA & VÍDEO) -->
+      <aside id="inspector-panel" class="inspector hidden">
+        <div class="insp-head">
+          <strong>🔬 Inspetor Óptico</strong>
+          <button type="button" class="nav-btn sm" id="btn-close-inspector">✕</button>
+        </div>
+        <div id="insp-body" class="insp-body">
+          <p class="muted">Abra qualquer site óptico para inspecionar telemetria do codec, erros corrigidos pelo Reed-Solomon (FEC), criptografia e arquivos extraídos na RAM.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- MODAL: PUBLICAR SITE EM VÍDEO ÓPTICO -->
+  <div id="modal-publish" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>📦 Empacotar &amp; Publicar Site em Vídeo Óptico</h3>
+        <button type="button" class="nav-btn sm" id="btn-close-publish">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" style="margin-bottom:10px;font-size:12.5px">Transforme qualquer pasta de site estático (<code>index.html</code>, CSS, JS, imagens, WebAssembly) em um vídeo pronto para subir no YouTube ou abrir imediatamente no BrightWeb.</p>
+
+        <div class="form-group">
+          <label>📁 Pasta do Site (contendo <code>index.html</code>)</label>
+          <div class="row-inline">
+            <input type="text" id="pub-folder" placeholder="Escolha uma pasta ou marque Site Demo abaixo">
+            <button type="button" class="btn" id="btn-pub-pick-folder">📁 Pasta</button>
+          </div>
+          <label class="check-row"><input type="checkbox" id="pub-use-demo"> <b>Usar Site Demo Interativo embutido</b> (HTML + CSS + JS + Canvas + página White-Hat)</label>
+        </div>
+
+        <div class="row-2">
+          <div class="form-group">
+            <label>🧩 Padrão de Dados</label>
+            <select id="pub-profile">
+              <optgroup label="🕵️ Máscaras Furtivas (Zero Grade · Passam Despercebidas)">
+                <option value="stealth-stars">✨ Máscara de Estrelas Tela Inteira (0% erro · 3b/estrela)</option>
+                <option value="stealth-rain">🌧️ Filtro de Chuva Tela Inteira (2b/gota · Cega)</option>
+                <option value="stealth-vhs">📼 Fita VHS Analógica (0% erro · Linhas 32×8)</option>
+                <option value="stealth-film">🎬 Cinema de Rolo 35mm (Grão Hanning Orgânico)</option>
+              </optgroup>
+              <optgroup label="🎨 Artísticos &amp; Dados Brutos">
+                <option value="art-fullres" selected>🌌 Relevo Nítido Full-Res 2-bit (p/ Fractais &amp; Artes)</option>
+                <option value="video-fractal">🎨 Croma Suave ±16 (p/ Vídeo Base + Fractal)</option>
+                <option value="art-fractal-angles">🧬 Gravura Linhas &amp; Ângulos (Cega)</option>
+                <option value="art-crystal">💎 Cristal 3D — 4 Ângulos</option>
+                <option value="y6-gray">📦 Dados Brutos 6 Tons (Máxima Densidade)</option>
+                <option value="y4-gray">🛡️ Dados Brutos 4 Tons (Ultra-Resistente 720p)</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>🎨 Efeito Artístico / Fractal</label>
+            <select id="pub-theme"></select>
+          </div>
+        </div>
+
+        <div class="row-3">
+          <div class="form-group">
+            <label>Resolução</label>
+            <select id="pub-res">
+              <option value="720p" selected>720p HD (Rápido &amp; Universal)</option>
+              <option value="1080p">1080p Full HD</option>
+              <option value="2k">2K QHD (VP9 YouTube)</option>
+              <option value="4k">4K UHD (Máxima Capacidade)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>FPS</label>
+            <select id="pub-fps">
+              <option value="10">10 FPS (Extra-Seguro)</option>
+              <option value="15" selected>15 FPS (Recomendado)</option>
+              <option value="24">24 FPS (Fluido)</option>
+              <option value="30">30 FPS (2× Capacidade)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>🧩 Vídeos Paralelos (Shards)</label>
+            <select id="pub-shards" title="Divide sites/jogos grandes em N vídeos que baixam e decodificam em paralelo!">
+              <option value="1" selected>1 vídeo único (Padrão)</option>
+              <option value="2">2 vídeos paralelos (2× rede)</option>
+              <option value="4">4 vídeos paralelos (4× rede · Jogos)</option>
+              <option value="8">8 vídeos paralelos (8× rede · Pesados)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="form-group">
+            <label>⏱️ Duração Mín. por vídeo (seg)</label>
+            <input type="number" id="pub-seconds" value="3" min="0" max="600" title="0 = exato para caber o site">
+          </div>
+          <div class="form-group">
+            <label>🎬 Vídeo ou Imagem Base Opcional</label>
+            <div class="row-inline">
+              <input type="text" id="pub-host-video" placeholder=".mp4, .mkv, .jpg, .png ou .webp">
+              <button type="button" class="btn" id="btn-pub-pick-host">📁 Mídia</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>🎵 Trilha de Áudio do Vídeo</label>
+          <select id="pub-audio-mode">
+            <option value="none" selected>🔇 Sem Áudio (Mais leve e rápido)</option>
+            <option value="ambient">🎹 Música Ambiente Generativa (Sintetizada)</option>
+            <option value="host">🎬 Áudio do Vídeo Base (se fornecido acima)</option>
+            <option value="file">🎵 Arquivo de Áudio Local (.mp3 / .wav / .m4a / .ogg)</option>
+          </select>
+          <div id="pub-music-wrap" class="row-2 hidden" style="margin-top:8px">
+            <div>
+              <label>🎼 Estilo Musical</label>
+              <select id="pub-music-style">
+                <option value="ambient" selected>🌌 Espacial / Dreamy Ambient</option>
+                <option value="lofi">☕ Lo-Fi Chillhop</option>
+                <option value="synthwave">🌆 Synthwave Retrô 80s</option>
+                <option value="piano">🎹 Piano Cinematográfico</option>
+                <option value="nature">🌊 Natureza &amp; Harpa</option>
+                <option value="meditation">🧘 Meditação Zen</option>
+                <option value="chiptune">🕹️ Chiptune 8-bit</option>
+              </select>
+            </div>
+            <div>
+              <label>🎭 Clima</label>
+              <select id="pub-music-mood">
+                <option value="dreamy" selected>☁️ Sonhador / Etéreo</option>
+                <option value="calm">🌿 Calmo / Relaxante</option>
+                <option value="melancholic">🌧️ Melancólico</option>
+                <option value="energetic">⚡ Energético / Épico</option>
+                <option value="mysterious">🔮 Misterioso</option>
+              </select>
+            </div>
+          </div>
+          <div id="pub-audio-file-wrap" class="hidden" style="margin-top:8px">
+            <label>Arquivo de Áudio Local</label>
+            <div class="row-inline">
+              <input type="text" id="pub-audio-source" placeholder="C:\...\musica.mp3 ou .wav">
+              <button type="button" class="btn" id="btn-pub-pick-audio">📁 Áudio</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>🔐 Acesso &amp; Criptografia</label>
+          <select id="pub-access">
+            <option value="open" selected>🌍 Web Aberta (YTWB001 — qualquer pessoa abre só com o link, sem senha)</option>
+            <option value="encrypted">🔒 Protegido com Senha(s) Pós-Quântica (YTPUB001 — 1 a 5 camadas)</option>
+          </select>
+          <div id="pub-pw-wrap" class="hidden" style="margin-top:8px">
+            <div id="pub-pw-list" class="pw-stack">
+              <input type="password" class="pub-pw" placeholder="Senha 1 (Camada Pós-Quântica)">
+            </div>
+            <button type="button" class="btn sm" id="btn-pub-add-pw" style="margin-top:6px">➕ Adicionar Senha Extra</button>
+          </div>
+        </div>
+
+        <div id="pub-progress" class="hint-box hidden">
+          <div style="display:flex;justify-content:space-between"><strong id="pub-prog-detail">Gerando...</strong><span id="pub-prog-pct">0%</span></div>
+          <div class="prog-track" style="margin:6px 0 0"><div class="prog-fill" id="pub-prog-bar" style="width:0%"></div></div>
+        </div>
+        <div id="pub-result" class="hidden" style="margin-top:10px"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" id="btn-cancel-publish" data-i18n="btn_close">Fechar</button>
+        <button type="button" class="btn primary" id="btn-run-publish" data-i18n="btn_run_pub">🚀 Gerar Vídeo do Site</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: APARÊNCIA & IDIOMA (6 TEMAS + 9 IDIOMAS) -->
+  <div id="modal-bw-settings" class="modal hidden">
+    <div class="modal-card" style="max-width:460px">
+      <div class="modal-head">
+        <h3 data-i18n="set_title">⚙️ Aparência &amp; Idioma — BrightWeb</h3>
+        <button type="button" class="nav-btn sm" id="btn-close-bw-settings">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label data-i18n="label_theme">🎨 Tema de Cores</label>
+          <select id="bw-theme-select">
+            <option value="bright-night" data-i18n="theme_bright_night">✨ Noite Brilhante (Padrão)</option>
+            <option value="night" data-i18n="theme_night">🌙 Noite (Azul Escuro)</option>
+            <option value="paper" data-i18n="theme_paper">📄 Papel Amarelado &amp; Preto</option>
+            <option value="desert" data-i18n="theme_desert">🏜️ Deserto (Âmbar Escuro)</option>
+            <option value="light" data-i18n="theme_light">☀️ Light (Branco)</option>
+            <option value="rainbow" data-i18n="theme_rainbow">🌈 Rainbow (Arco-Íris Pastel)</option>
+            <option value="twilight" data-i18n="theme_twilight">🌆 Crepúsculo (Violeta)</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-top:12px">
+          <label data-i18n="label_lang">🌐 Idioma</label>
+          <select id="bw-lang-select">
+            <option value="pt">🇧🇷 Português</option>
+            <option value="en">🇺🇸 English</option>
+            <option value="es">🇪🇸 Español</option>
+            <option value="ru">🇷🇺 Русский</option>
+            <option value="fr">🇫🇷 Français</option>
+            <option value="it">🇮🇹 Italiano</option>
+            <option value="ja">🇯🇵 日本語</option>
+            <option value="ar">🇸🇦 العربية</option>
+            <option value="zh">🇨🇳 中文</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn primary" id="btn-done-bw-settings" data-i18n="btn_close">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
