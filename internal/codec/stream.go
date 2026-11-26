@@ -1292,6 +1292,30 @@ func decodeVideoAtSize(ffmpegPath, videoPath string, w, h int, rescale bool, man
 	}
 	_ = cmd.Wait()
 
+	// Phase 3 (Rescue): if any ProfileStealthFilm frames failed due to YouTube VP9 inter-frame
+	// temporal attenuation on static/slow backgrounds, run a lightweight sliding-window temporal
+	// host-leakage cancellation pass ONLY on the missing frames!
+	if !manifestOnly && !manifestSpread && totalFrames > 0 && baseHint.ProfileID == ProfileStealthFilm &&
+		uint32(len(manifestSeen)+len(seen)) < totalFrames {
+		missing := make(map[uint32]bool)
+		mCnt := uint32(len(manifestSeen))
+		for i := uint32(0); i < mCnt; i++ {
+			if _, ok := manifestSeen[i]; !ok {
+				missing[i] = true
+			}
+		}
+		for i := mCnt; i < totalFrames; i++ {
+			if _, ok := seen[i]; !ok {
+				missing[i] = true
+			}
+		}
+		if len(missing) > 0 {
+			rescueStealthFilmFrames(ffmpegPath, videoPath, w, h, phaseOffset, missing, func(res *DecodeFrameResult) {
+				recordResult(res)
+			})
+		}
+	}
+
 	if len(manifestSeen) == 0 {
 		return nil, fmt.Errorf("nenhum frame YTCloud válido encontrado no vídeo (%s)", strings.TrimSpace(stderr.String()))
 	}
@@ -1364,6 +1388,187 @@ func decodeVideoAtSize(ffmpegPath, videoPath string, w, h int, rescale bool, man
 		EncryptedManifest:   encManifest,
 		EncryptedPayload:    encPayload,
 	}, nil
+}
+
+// rescueStealthFilmFrames streams the video once with a sliding window of Y planes (radius=7 -> 14 neighbors,
+// all guaranteed to have different phase != i%8!) and rescues ONLY missing ProfileStealthFilm frames in parallel
+// via temporal host-leakage cancellation (Y_t - alpha*BG) + scene-cut-aware fallbacks (prev5 / next5 / tight2).
+func rescueStealthFilmFrames(ffmpegPath, videoPath string, w, h, phaseOffset int, missing map[uint32]bool, onRecovered func(*DecodeFrameResult)) {
+	cmd := exec.Command(ffmpegPath,
+		"-v", "error",
+		"-threads", "0",
+		"-i", videoPath,
+		"-f", "rawvideo",
+		"-pix_fmt", "yuv420p",
+		"-",
+	)
+	sysutil.ApplySubprocessAttrs(cmd, true)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	const radius = 7
+	type winEntry struct {
+		rawIdx int
+		yPlane []byte
+	}
+	type rescueJob struct {
+		target  []byte
+		phase   int
+		allNB   [][]byte
+		prevNB  [][]byte
+		nextNB  [][]byte
+		prev1NB [][]byte
+		tightNB [][]byte
+	}
+
+	ySize := w * h
+	tmpFrame := NewYUVFrame(w, h)
+	var window []winEntry
+
+	// Quick sampled MAD (~512 pixels) to reject neighbors from a different scene across a scene cut
+	quickMAD := func(a, b []byte) float64 {
+		step := len(a) / 512
+		if step < 1 {
+			step = 1
+		}
+		var sum, cnt int
+		for i := 0; i < len(a); i += step {
+			d := int(a[i]) - int(b[i])
+			if d < 0 {
+				d = -d
+			}
+			sum += d
+			cnt++
+		}
+		if cnt == 0 {
+			return 0
+		}
+		return float64(sum) / float64(cnt)
+	}
+
+	workers := GetMaxWorkers()
+	if workers > 8 {
+		workers = 8
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	jobCh := make(chan rescueJob, workers*2)
+	var recMu sync.Mutex
+	var wg sync.WaitGroup
+	for wi := 0; wi < workers; wi++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobCh {
+				srcView := &YUVFrame{Width: w, Height: h, Buf: job.target}
+				candidates := [][][]byte{job.allNB, job.prevNB, job.nextNB, job.prev1NB, job.tightNB}
+				res, decErr := DecodeStealthFilmWithNeighborSets(srcView, candidates, job.phase)
+				if decErr == nil && res != nil {
+					recMu.Lock()
+					onRecovered(res)
+					recMu.Unlock()
+				}
+			}
+		}()
+	}
+
+	pendingMissing := make(map[uint32]bool, len(missing))
+	for k := range missing {
+		pendingMissing[k] = true
+	}
+
+	dispatchEntry := func(centerPos int) {
+		if len(pendingMissing) == 0 {
+			return
+		}
+		target := window[centerPos]
+		estIdx := target.rawIdx + phaseOffset
+		if estIdx < 0 || !pendingMissing[uint32(estIdx)] {
+			return
+		}
+		delete(pendingMissing, uint32(estIdx))
+
+		var allNB, sameSceneNB, prevNB, nextNB, prev1NB, tightNB [][]byte
+		for i, we := range window {
+			if i == centerPos {
+				continue
+			}
+			// Never include a neighbor with identical 8-frame phase (its grain would correlate!)
+			if ((we.rawIdx - target.rawIdx) % 8) == 0 {
+				continue
+			}
+			allNB = append(allNB, we.yPlane)
+			if quickMAD(target.yPlane, we.yPlane) < 26.0 {
+				sameSceneNB = append(sameSceneNB, we.yPlane)
+			}
+			dist := i - centerPos
+			if dist < 0 && dist >= -7 {
+				prevNB = append(prevNB, we.yPlane)
+			} else if dist > 0 && dist <= 7 {
+				nextNB = append(nextNB, we.yPlane)
+			}
+			if dist == -1 {
+				prev1NB = append(prev1NB, we.yPlane)
+			}
+			if dist == -1 || dist == 1 {
+				tightNB = append(tightNB, we.yPlane)
+			}
+		}
+		primary := sameSceneNB
+		if len(primary) < 2 {
+			primary = allNB
+		}
+		if len(primary) == 0 {
+			return
+		}
+		jobCh <- rescueJob{
+			target:  target.yPlane,
+			phase:   ((estIdx % 8) + 8) % 8,
+			allNB:   primary,
+			prevNB:  prevNB,
+			nextNB:  nextNB,
+			prev1NB: prev1NB,
+			tightNB: tightNB,
+		}
+	}
+
+	rawIdx := 0
+	for len(pendingMissing) > 0 {
+		if err := readFullChunked(stdout, tmpFrame.Buf); err != nil {
+			break
+		}
+		yCopy := make([]byte, ySize)
+		copy(yCopy, tmpFrame.Buf[:ySize])
+		window = append(window, winEntry{rawIdx: rawIdx, yPlane: yCopy})
+		rawIdx++
+
+		if len(window) > radius {
+			centerPos := len(window) - 1 - radius
+			dispatchEntry(centerPos)
+		}
+		if len(window) > 2*radius+1 {
+			window = window[1:]
+		}
+	}
+	startTail := len(window) - radius
+	if startTail < 0 {
+		startTail = 0
+	}
+	for pos := startTail; pos < len(window) && len(pendingMissing) > 0; pos++ {
+		dispatchEntry(pos)
+	}
+	close(jobCh)
+	wg.Wait()
 }
 
 // CalibrationResult reports round-trip survival metrics for a modulation profile under lossy compression.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 )
 
@@ -325,6 +326,246 @@ func (rs *RSCodec) DecodeBlock(cw []byte) (int, error) {
 	return L, nil
 }
 
+// DecodeBlockWithErasures performs full Errors+Erasures Reed-Solomon decoding (Forney modified
+// syndromes + Berlekamp-Massey + Chien search + Forney magnitudes) on a 255-byte codeword.
+// It can correct up to 2*e + s <= ParityBytes (e.g. up to 76 erasures instead of 38 unknown errors!).
+// Requires safetyMargin unused syndrome bytes (2*e + s <= ParityBytes - safetyMargin) to prevent
+// spurious aliasing when s is large. On failure, cw is left unmodified.
+func (rs *RSCodec) DecodeBlockWithErasures(cw []byte, erasures []int, safetyMargin int) (int, error) {
+	n := 255
+	p := rs.ParityBytes
+	if len(cw) != n {
+		return 0, errors.New("tamanho de codeword RS inválido")
+	}
+	s := len(erasures)
+	if s == 0 {
+		return rs.DecodeBlock(cw)
+	}
+	if s > p-safetyMargin {
+		return 0, fmt.Errorf("erasures acima do limite seguro (%d > %d)", s, p-safetyMargin)
+	}
+
+	// 1. Compute syndromes S_j = cw(alpha^j) for j = 0..p-1
+	syn := make([]byte, p)
+	hasErr := false
+	for j := 0; j < p; j++ {
+		eval := byte(0)
+		root := gfExp[j]
+		for i := 0; i < n; i++ {
+			eval = gfMul(eval, root) ^ cw[i]
+		}
+		syn[j] = eval
+		if eval != 0 {
+			hasErr = true
+		}
+	}
+	if !hasErr {
+		return 0, nil
+	}
+
+	// 2. Erasure locator polynomial Lambda_eras(x) = prod(1 + X_r * x)
+	var isEras [255]bool
+	erasLoc := make([]byte, s+1)
+	erasLoc[0] = 1
+	for k, pos := range erasures {
+		if pos < 0 || pos >= n || isEras[pos] {
+			return 0, errors.New("posição de erasure inválida ou duplicada")
+		}
+		isEras[pos] = true
+		xr := gfExp[n-1-pos]
+		for i := k + 1; i >= 1; i-- {
+			erasLoc[i] ^= gfMul(erasLoc[i-1], xr)
+		}
+	}
+
+	// 3. Forney modified syndromes T(x) = (S(x) * Lambda_eras(x)) mod x^p
+	modSyn := make([]byte, p)
+	for i := 0; i < p; i++ {
+		var sum byte
+		for j := 0; j <= s && j <= i; j++ {
+			sum ^= gfMul(syn[i-j], erasLoc[j])
+		}
+		modSyn[i] = sum
+	}
+
+	// 4. Berlekamp-Massey on remaining remLen = p - s modified syndromes modSyn[s..p-1]
+	remLen := p - s
+	maxErr := (remLen - safetyMargin) / 2
+	if maxErr < 0 {
+		maxErr = 0
+	}
+	C := make([]byte, remLen+1)
+	B := make([]byte, remLen+1)
+	C[0] = 1
+	B[0] = 1
+	L := 0
+	m := 1
+	b := byte(1)
+
+	for step := 0; step < remLen; step++ {
+		d := modSyn[s+step]
+		for i := 1; i <= L; i++ {
+			d ^= gfMul(C[i], modSyn[s+step-i])
+		}
+		if d == 0 {
+			m++
+			continue
+		}
+		T := make([]byte, len(C))
+		copy(T, C)
+		coef := gfDiv(d, b)
+		for i := 0; i+m < len(C); i++ {
+			C[i+m] ^= gfMul(coef, B[i])
+		}
+		if 2*L <= step {
+			L = step + 1 - L
+			B = T
+			b = d
+			m = 1
+		} else {
+			m++
+		}
+	}
+
+	if L > maxErr {
+		return 0, fmt.Errorf("erros+erasures acima da capacidade FEC (L=%d, s=%d, maxL=%d)", L, s, maxErr)
+	}
+
+	// 5. Chien search for the L unknown error positions (must not collide with erasures)
+	errPos := make([]int, 0, L)
+	if L > 0 {
+		for power := 0; power < n; power++ {
+			xInv := gfExp[(255-power)%255]
+			eval := C[0]
+			xPow := byte(1)
+			for j := 1; j <= L; j++ {
+				xPow = gfMul(xPow, xInv)
+				eval ^= gfMul(C[j], xPow)
+			}
+			if eval == 0 {
+				pos := n - 1 - power
+				if isEras[pos] {
+					return 0, errors.New("raiz de erro colidiu com erasure")
+				}
+				errPos = append(errPos, pos)
+			}
+		}
+		if len(errPos) != L {
+			return 0, fmt.Errorf("falha na busca de Chien com erasures (%d/%d)", len(errPos), L)
+		}
+	}
+
+	// 6. Combined locator Psi(x) = Lambda_eras(x) * C(x) of degree totalDeg = s + L
+	totalDeg := s + L
+	psi := make([]byte, totalDeg+1)
+	for i := 0; i <= s; i++ {
+		if erasLoc[i] == 0 {
+			continue
+		}
+		for j := 0; j <= L; j++ {
+			psi[i+j] ^= gfMul(erasLoc[i], C[j])
+		}
+	}
+
+	// 7. Combined evaluator Omega(x) = (S(x) * Psi(x)) mod x^p
+	omega := make([]byte, p)
+	for i := 0; i < p; i++ {
+		var sum byte
+		for j := 0; j <= totalDeg && j <= i; j++ {
+			sum ^= gfMul(syn[i-j], psi[j])
+		}
+		omega[i] = sum
+	}
+
+	// 8. Evaluate Forney error/erasure magnitudes on a scratch copy
+	cand := make([]byte, n)
+	copy(cand, cw)
+	allPos := make([]int, 0, totalDeg)
+	allPos = append(allPos, erasures...)
+	allPos = append(allPos, errPos...)
+
+	changed := 0
+	for _, pos := range allPos {
+		power := n - 1 - pos
+		xk := gfExp[power]
+		xkInv := gfInv(xk)
+
+		num := byte(0)
+		xp := byte(1)
+		for i := 0; i < totalDeg; i++ {
+			num ^= gfMul(omega[i], xp)
+			xp = gfMul(xp, xkInv)
+		}
+
+		den := byte(0)
+		xp = 1
+		for j := 1; j <= totalDeg; j += 2 {
+			den ^= gfMul(psi[j], xp)
+			xp = gfMul(xp, gfMul(xkInv, xkInv))
+		}
+		if den == 0 {
+			return 0, errors.New("derivada nula na fórmula de Forney (erasures)")
+		}
+		mag := gfMul(xk, gfDiv(num, den))
+		if mag != 0 {
+			cand[pos] ^= mag
+			changed++
+		}
+	}
+
+	// 9. Verify ALL p syndromes are now strictly zero
+	for j := 0; j < p; j++ {
+		eval := byte(0)
+		root := gfExp[j]
+		for i := 0; i < n; i++ {
+			eval = gfMul(eval, root) ^ cand[i]
+		}
+		if eval != 0 {
+			return 0, errors.New("verificação pós-correção RS (erasures) falhou")
+		}
+	}
+
+	copy(cw, cand)
+	return changed, nil
+}
+
+// DecodeBlockSoft performs standard hard-decision RS decoding first, and if that fails and
+// per-byte soft reliabilities `conf` (255 entries, smaller = less reliable) are provided,
+// runs Generalized Minimum Distance (GMD) errors+erasures decoding across increasing erasure counts.
+func (rs *RSCodec) DecodeBlockSoft(cw []byte, conf []float32) (int, error) {
+	corrected, hardErr := rs.DecodeBlock(cw)
+	if hardErr == nil || len(conf) != 255 {
+		return corrected, hardErr
+	}
+
+	// Rank byte indices from least reliable to most reliable
+	order := make([]int, 255)
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return conf[order[i]] < conf[order[j]]
+	})
+
+	// GMD erasure schedule: step by 2 from smallest s (highest ML confidence) up to ParityBytes-4
+	// (32-bit extra syndrome check -> false-accept prob < 2.3e-10 per trial).
+	maxSafe := rs.ParityBytes - 4
+	for s := 2; s <= maxSafe; s += 2 {
+		if c, err := rs.DecodeBlockWithErasures(cw, order[:s], 4); err == nil {
+			return c, nil
+		}
+	}
+	// Chase-1 rescue: flip the single least-confident byte among the weakest 16 candidates?
+	// No — even better: try relaxing safetyMargin to 2 bytes (16-bit extra check, still protected
+	// end-to-end by AES-256-GCM + XChaCha20-Poly1305 AEAD & SHA-256!) across s = 4..ParityBytes-2.
+	for s := 4; s <= rs.ParityBytes-2; s += 2 {
+		if c, err := rs.DecodeBlockWithErasures(cw, order[:s], 2); err == nil {
+			return c, nil
+		}
+	}
+	return 0, hardErr
+}
+
 // EncodeInterleaved encodes payload into exactly rawLen bytes using RS(255, K) + full-frame byte interleaving.
 func (rs *RSCodec) EncodeInterleaved(payload []byte, rawLen int) []byte {
 	numBlocks := rawLen / 255
@@ -376,15 +617,30 @@ func (rs *RSCodec) EncodeInterleaved(payload []byte, rawLen int) []byte {
 // DecodeInterleaved de-interleaves raw frame bytes and runs parallel Reed-Solomon error correction.
 // Returns recovered payload bytes (of length numBlocks*DataBytes), total corrected byte errors, and any uncorrectable error.
 func (rs *RSCodec) DecodeInterleaved(raw []byte) ([]byte, int, error) {
+	return rs.DecodeInterleavedSoft(raw, nil)
+}
+
+// DecodeInterleavedSoft is like DecodeInterleaved, but also accepts optional per-byte soft
+// reliability scores (same length as raw, smaller = less reliable) to unlock GMD Errors+Erasures
+// decoding whenever a block exceeds the hard-decision t=ParityBytes/2 error limit!
+func (rs *RSCodec) DecodeInterleavedSoft(raw []byte, rawConf []float32) ([]byte, int, error) {
 	numBlocks := len(raw) / 255
 	if numBlocks == 0 {
 		return nil, 0, errors.New("frame sem blocos RS suficientes")
 	}
+	useSoft := len(rawConf) >= numBlocks*255
 	codewords := make([]byte, numBlocks*255)
+	var cwConfs []float32
+	if useSoft {
+		cwConfs = make([]float32, numBlocks*255)
+	}
 	for j := 0; j < 255; j++ {
 		base := j * numBlocks
 		for b := 0; b < numBlocks; b++ {
 			codewords[b*255+j] = raw[base+b]
+			if useSoft {
+				cwConfs[b*255+j] = rawConf[base+b]
+			}
 		}
 	}
 
@@ -414,7 +670,11 @@ func (rs *RSCodec) DecodeInterleaved(raw []byte) ([]byte, int, error) {
 			localErrs := 0
 			for b := s; b < e; b++ {
 				cw := codewords[b*255 : (b+1)*255]
-				corrected, err := rs.DecodeBlock(cw)
+				var conf []float32
+				if useSoft {
+					conf = cwConfs[b*255 : (b+1)*255]
+				}
+				corrected, err := rs.DecodeBlockSoft(cw, conf)
 				if err != nil {
 					mu.Lock()
 					if firstErr == nil {

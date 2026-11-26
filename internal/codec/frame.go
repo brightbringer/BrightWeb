@@ -2230,9 +2230,9 @@ func DecodeFrameWithHint(src *YUVFrame, hint DecodeHint) (*DecodeFrameResult, er
 
 	rawLen := baseProf.RawByteCapacityLayoutWithFlags(src.Width, src.Height, layoutV2, hdr.Flags)
 	if IsStealthArtMode(prof.ArtMode) {
-		raw := decodeStealthMode(src, prof.ArtMode, hdr, layoutV2, rawLen)
+		raw, rawConf := decodeStealthMode(src, prof.ArtMode, hdr, layoutV2, rawLen)
 		rs := GetRSCodec(prof.RSDataBytes)
-		recovered, corrected, err := rs.DecodeInterleaved(raw)
+		recovered, corrected, err := rs.DecodeInterleavedSoft(raw, rawConf)
 		if err != nil {
 			return nil, fmt.Errorf("frame %d falhou na correção FEC: %w", hdr.FrameIndex, err)
 		}

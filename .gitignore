@@ -1,0 +1,10 @@
+# Arquivos temporários, logs e caches locais
+*.log
+*.tmp
+*.bak
+*.old
+*.mp4
+*.mkv
+*.webm
+.DS_Store
+Thumbs.db

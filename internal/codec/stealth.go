@@ -1,6 +1,10 @@
 package codec
 
-import "math"
+import (
+	"errors"
+	"fmt"
+	"math"
+)
 
 // ============================================================================
 // STEALTH OPTICAL MASKS (Zero-Grid Blind-Decodable Aesthetic Carriers)
@@ -168,6 +172,7 @@ func encodeStealthHeaderRS(hdr FrameHeader) [stealthHeaderBytes]byte {
 	return out
 }
 
+
 // decodeStealthHeaderRS recovers a 32-byte FrameHeader from 96 strided stealth bytes (up to 32 corrupted bytes!).
 func decodeStealthHeaderRS(raw96 []byte) (FrameHeader, error) {
 	if len(raw96) < stealthHeaderBytes {
@@ -279,6 +284,7 @@ func extractStealthPayload(full []byte, totalBytes, rawLen int, hideHeader bool)
 	return out
 }
 
+
 // encodeStealthMode renders the chosen stealth optical mask directly over dst (which already holds host/art canvas).
 func encodeStealthMode(dst *YUVFrame, mode string, hdr FrameHeader, raw []byte, maskIntensity uint8, hideHeader, isVisualFiller bool) {
 	x0, y0, dw, dh, _ := stealthGridBounds(dst.Width, dst.Height, true, hdr.Flags)
@@ -301,8 +307,45 @@ func encodeStealthMode(dst *YUVFrame, mode string, hdr FrameHeader, raw []byte, 
 	}
 }
 
-// decodeStealthMode extracts raw RS payload bytes from a stealth frame (after its header is already parsed).
-func decodeStealthMode(src *YUVFrame, mode string, hdr FrameHeader, layoutV2 bool, rawLen int) []byte {
+func extractStealthPayloadWithConf(full []byte, fullConf []float32, totalBytes, rawLen int, hideHeader bool) ([]byte, []float32) {
+	if !hideHeader {
+		out := make([]byte, rawLen)
+		copy(out, full)
+		if len(fullConf) == 0 {
+			return out, nil
+		}
+		outConf := make([]float32, rawLen)
+		copy(outConf, fullConf)
+		return out, outConf
+	}
+	isHdrSlot := make([]bool, totalBytes)
+	for i := 0; i < stealthHeaderBytes; i++ {
+		pos := stealthHeaderBytePos(i, totalBytes)
+		if pos < totalBytes {
+			isHdrSlot[pos] = true
+		}
+	}
+	out := make([]byte, rawLen)
+	var outConf []float32
+	if len(fullConf) > 0 {
+		outConf = make([]float32, rawLen)
+	}
+	pIdx := 0
+	for pos := 0; pos < len(full) && pos < totalBytes && pIdx < rawLen; pos++ {
+		if isHdrSlot[pos] {
+			continue
+		}
+		out[pIdx] = full[pos]
+		if outConf != nil && pos < len(fullConf) {
+			outConf[pIdx] = fullConf[pos]
+		}
+		pIdx++
+	}
+	return out, outConf
+}
+
+// decodeStealthMode extracts raw RS payload bytes (and optional per-byte soft reliabilities) from a stealth frame.
+func decodeStealthMode(src *YUVFrame, mode string, hdr FrameHeader, layoutV2 bool, rawLen int) ([]byte, []float32) {
 	x0, y0, dw, dh, hdrBytes := stealthGridBounds(src.Width, src.Height, layoutV2, hdr.Flags)
 	totalBytes := stealthTotalBytes(mode, dw, dh)
 	hideHeader := hdrBytes > 0
@@ -313,19 +356,20 @@ func decodeStealthMode(src *YUVFrame, mode string, hdr FrameHeader, layoutV2 boo
 	phase := int(hdr.FrameIndex % 8)
 
 	var full []byte
+	var fullConf []float32
 	switch mode {
 	case "stealth-vhs":
 		full = decodeStealthVHSGrid(src, x0, y0, dw, dh, need)
 	case "stealth-rain":
 		full = decodeStealthRainGrid(src, x0, y0, dw, dh, phase, need)
 	case "stealth-film":
-		full = decodeStealthFilmGrid(src, x0, y0, dw, dh, phase, need)
+		full, fullConf = decodeStealthFilmGridSoft(src, x0, y0, dw, dh, phase, need)
 	case "stealth-stars":
 		full = decodeStealthStarsGrid(src, x0, y0, dw, dh, need)
 	default:
-		return make([]byte, rawLen)
+		return make([]byte, rawLen), nil
 	}
-	return extractStealthPayload(full, totalBytes, rawLen, hideHeader)
+	return extractStealthPayloadWithConf(full, fullConf, totalBytes, rawLen, hideHeader)
 }
 
 // readHeaderHiddenStealthHint fast-checks a single known stealth profile & expected phase (~0.05ms!).
@@ -540,6 +584,7 @@ func decodeStealthVHSGrid(src *YUVFrame, x0, y0, dw, dh, maxBytes int) []byte {
 	return out
 }
 
+
 func decodeStealthVHSHeaderSlots(src *YUVFrame, w, h int) []byte {
 	totalBytes := stealthTotalBytes("stealth-vhs", w, h)
 	if totalBytes < stealthHeaderBytes {
@@ -572,6 +617,7 @@ func decodeStealthVHSHeaderSlots(src *YUVFrame, w, h int) []byte {
 	}
 	return out
 }
+
 
 // ----------------------------------------------------------------------------
 // 2. STEALTH FALLING RAIN MASK (22x26 edge-to-edge diagonal PPM raindrops, 2 bits/drop)
@@ -741,6 +787,7 @@ func decodeStealthRainGrid(src *YUVFrame, x0, y0, dw, dh, phase, maxBytes int) [
 	return out
 }
 
+
 func decodeStealthRainHeaderSlots(src *YUVFrame, w, h, phase int) []byte {
 	totalBytes := stealthTotalBytes("stealth-rain", w, h)
 	if totalBytes < stealthHeaderBytes {
@@ -786,6 +833,7 @@ func decodeStealthRainHeaderSlots(src *YUVFrame, w, h, phase int) []byte {
 	}
 	return out
 }
+
 
 // ----------------------------------------------------------------------------
 // 3. STEALTH 35mm CELLULOID FILM GRAIN (16x16 Hanning-windowed 4x4-clump DSSS)
@@ -852,18 +900,18 @@ func encodeStealthFilmGrid(dst *YUVFrame, x0, y0, dw, dh, phase int, seed uint64
 		}
 	}
 
-	amp := 20.5
-	maxGain := 64.0
+	amp := 23.5
+	maxGain := 74.0
 	switch maskIntensity & 3 {
 	case MaskIntensitySubtle:
-		amp = 17.0
-		maxGain = 52.0
+		amp = 19.0
+		maxGain = 60.0
 	case MaskIntensityStrong:
-		amp = 24.5
-		maxGain = 76.0
+		amp = 27.5
+		maxGain = 86.0
 	case MaskIntensityMax:
-		amp = 28.5
-		maxGain = 88.0
+		amp = 31.5
+		maxGain = 96.0
 	}
 
 	cols := dw / stealthFilmCell
@@ -917,11 +965,21 @@ func encodeStealthFilmGrid(dst *YUVFrame, x0, y0, dw, dh, phase int, seed uint64
 }
 
 func decodeStealthFilmGrid(src *YUVFrame, x0, y0, dw, dh, phase, maxBytes int) []byte {
+	out, _ := decodeStealthFilmGridSoft(src, x0, y0, dw, dh, phase, maxBytes)
+	return out
+}
+
+
+func decodeStealthFilmGridSoft(src *YUVFrame, x0, y0, dw, dh, phase, maxBytes int) ([]byte, []float32) {
 	w := src.Width
 	Y := src.YPlane()
 	cols := dw / stealthFilmCell
 	rows := dh / stealthFilmCell
 	out := make([]byte, maxBytes)
+	conf := make([]float32, maxBytes)
+	for i := range conf {
+		conf[i] = float32(1e9)
+	}
 	maxBits := maxBytes * 8
 	bitIdx := 0
 	var patch [stealthFilmCell * stealthFilmCell]float64
@@ -931,21 +989,30 @@ func decodeStealthFilmGrid(src *YUVFrame, x0, y0, dw, dh, phase, maxBytes int) [
 		for c := 0; c < cols && bitIdx < maxBits; c++ {
 			px := x0 + c*stealthFilmCell
 			fillStealthFilmPatch(r, c, phase, &patch)
-			var dot float64
+			var dot, norm2 float64
 			for dy := 0; dy < stealthFilmCell; dy++ {
 				row := Y[(py+dy)*w+px : (py+dy)*w+px+stealthFilmCell]
 				pOff := dy * stealthFilmCell
 				for dx := 0; dx < stealthFilmCell; dx++ {
-					dot += float64(row[dx]) * patch[pOff+dx]
+					p := patch[pOff+dx]
+					dot += float64(row[dx]) * p
+					norm2 += p * p
 				}
 			}
+			bIdx := bitIdx >> 3
 			if dot >= 0 {
-				out[bitIdx>>3] |= 1 << uint(7-(bitIdx&7))
+				out[bIdx] |= 1 << uint(7-(bitIdx&7))
+			}
+			// Normalized matched-filter projection magnitude |dot| / sqrt(norm2):
+			// tracks exact bit SNR so GMD erasure decoding flags the most uncertain bytes first!
+			bitRel := float32(math.Abs(dot) / (math.Sqrt(norm2) + 1e-9))
+			if bitRel < conf[bIdx] {
+				conf[bIdx] = bitRel
 			}
 			bitIdx++
 		}
 	}
-	return out
+	return out, conf
 }
 
 func decodeStealthFilmHeaderSlots(src *YUVFrame, w, h, phase int) []byte {
@@ -981,6 +1048,206 @@ func decodeStealthFilmHeaderSlots(src *YUVFrame, w, h, phase int) []byte {
 	}
 	return out
 }
+
+// DecodeStealthFilmWithBG rescues a ProfileStealthFilm frame damaged by YouTube VP9 inter-frame
+// temporal attenuation (where VP9 preserves ~100% of a static/slow host H while attenuating the
+// time-varying 35mm grain by beta, leaking (1-beta)*proj(H, P_t) into the matched filter!).
+// Subtracting alpha*dot(BG, P_t) in unclamped float space cancels host leakage exactly and pairs
+// with per-block GMD Soft-Decision Reed-Solomon decoding across multiple neighbor sets.
+func DecodeStealthFilmWithBG(src *YUVFrame, neighbors [][]byte, expectedPhase int) (*DecodeFrameResult, error) {
+	return DecodeStealthFilmWithNeighborSets(src, [][][]byte{neighbors}, expectedPhase)
+}
+
+// DecodeStealthFilmWithNeighborSets tries one or more temporal neighbor sets (e.g., rad7, prev5, next5,
+// prev-keyframe t-1, tight2) and accumulates solved independent RS codewords across alphas & sets!
+func DecodeStealthFilmWithNeighborSets(src *YUVFrame, neighborSets [][][]byte, expectedPhase int) (*DecodeFrameResult, error) {
+	w, h := src.Width, src.Height
+	Y := src.YPlane()
+	phase := ((expectedPhase % 8) + 8) % 8
+	cols := w / stealthFilmCell
+	rows := h / stealthFilmCell
+	numCells := cols * rows
+	totalBytes := numCells / 8
+	if totalBytes < stealthHeaderBytes {
+		return nil, errors.New("resolução insuficiente para stealth-film")
+	}
+
+	// Precompute (dotY, invNorm) ONCE across all neighbor sets
+	dotY := make([]float64, numCells)
+	invNorm := make([]float64, numCells)
+	patches := make([][stealthFilmCell * stealthFilmCell]float64, numCells)
+
+	cellIdx := 0
+	for r := 0; r < rows; r++ {
+		py := r * stealthFilmCell
+		for c := 0; c < cols; c++ {
+			px := c * stealthFilmCell
+			pPtr := &patches[cellIdx]
+			fillStealthFilmPatch(r, c, phase, pPtr)
+			var dySum, norm2 float64
+			for dy := 0; dy < stealthFilmCell; dy++ {
+				rowOff := (py+dy)*w + px
+				pOff := dy * stealthFilmCell
+				yRow := Y[rowOff : rowOff+stealthFilmCell]
+				for dx := 0; dx < stealthFilmCell; dx++ {
+					p := pPtr[pOff+dx]
+					dySum += float64(yRow[dx]) * p
+					norm2 += p * p
+				}
+			}
+			dotY[cellIdx] = dySum
+			invNorm[cellIdx] = 1.0 / (math.Sqrt(norm2) + 1e-9)
+			cellIdx++
+		}
+	}
+
+	baseProf := Profiles[ProfileStealthFilm]
+	rs := GetRSCodec(baseProf.RSDataBytes)
+	alphas := []float64{0.38, 0.34, 0.42, 0.30, 0.46, 0.25, 0.52, 0.20, 0.58, 0.14, 0.66, 0.08, 0.75, 0.0}
+
+	var hdr FrameHeader
+	hdrOK := false
+	var rawLen, numBlocks int
+	var hideHeader bool
+	var solvedBlocks [][]byte
+	var solvedErrs []int
+	solvedCount := 0
+	var lastErr error
+
+	dotBG := make([]float64, numCells)
+	full := make([]byte, totalBytes)
+	fullConf := make([]float32, totalBytes)
+
+	for _, neighbors := range neighborSets {
+		if len(neighbors) == 0 {
+			continue
+		}
+		invN := 1.0 / float64(len(neighbors))
+		ci := 0
+		for r := 0; r < rows; r++ {
+			py := r * stealthFilmCell
+			for c := 0; c < cols; c++ {
+				px := c * stealthFilmCell
+				pPtr := &patches[ci]
+				var dbgSum float64
+				for dy := 0; dy < stealthFilmCell; dy++ {
+					rowOff := (py+dy)*w + px
+					pOff := dy * stealthFilmCell
+					for dx := 0; dx < stealthFilmCell; dx++ {
+						var nSum float64
+						for _, nb := range neighbors {
+							nSum += float64(nb[rowOff+dx])
+						}
+						dbgSum += (nSum * invN) * pPtr[pOff+dx]
+					}
+				}
+				dotBG[ci] = dbgSum
+				ci++
+			}
+		}
+
+		// 1. Decode hidden stealth header if not yet recovered
+		if !hdrOK {
+			for _, alpha := range append([]float64{0.0}, alphas[:len(alphas)-1]...) {
+				raw96 := make([]byte, stealthHeaderBytes)
+				for i := 0; i < stealthHeaderBytes; i++ {
+					byteSlot := stealthHeaderBytePos(i, totalBytes)
+					var b byte
+					for bit := 0; bit < 8; bit++ {
+						idx := byteSlot*8 + bit
+						if dotY[idx]-alpha*dotBG[idx] >= 0 {
+							b |= 1 << uint(7-bit)
+						}
+					}
+					raw96[i] = b
+				}
+				if hCand, err := decodeStealthHeaderRS(raw96); err == nil && hCand.ProfileID == ProfileStealthFilm && int(hCand.FrameIndex%8) == phase {
+					hdr = hCand
+					hdrOK = true
+					rawLen = baseProf.RawByteCapacityLayoutWithFlags(w, h, true, hdr.Flags)
+					hideHeader = hdr.Flags&FlagHiddenHeader != 0
+					numBlocks = rawLen / 255
+					solvedBlocks = make([][]byte, numBlocks)
+					solvedErrs = make([]int, numBlocks)
+					break
+				}
+			}
+			if !hdrOK {
+				continue
+			}
+		}
+
+		// 2. Sweep alpha in unclamped float space, solving ONLY remaining unsolved RS blocks!
+		cw := make([]byte, 255)
+		cwConf := make([]float32, 255)
+		for _, alpha := range alphas {
+			for bIdx := 0; bIdx < totalBytes; bIdx++ {
+				var b byte
+				minRel := float32(1e9)
+				base := bIdx * 8
+				for bit := 0; bit < 8; bit++ {
+					idx := base + bit
+					d := dotY[idx] - alpha*dotBG[idx]
+					if d >= 0 {
+						b |= 1 << uint(7-bit)
+					}
+					// Host-texture-aware reliability: down-weight cells where host projection |dotBG| is large!
+					bgMag := math.Abs(dotBG[idx]) * invNorm[idx]
+					rel := float32((math.Abs(d) * invNorm[idx]) / (1.0 + 0.03*bgMag))
+					if rel < minRel {
+						minRel = rel
+					}
+				}
+				full[bIdx] = b
+				fullConf[bIdx] = minRel
+			}
+			raw, rawConf := extractStealthPayloadWithConf(full, fullConf, totalBytes, rawLen, hideHeader)
+			for b := 0; b < numBlocks; b++ {
+				if solvedBlocks[b] != nil {
+					continue
+				}
+				for j := 0; j < 255; j++ {
+					off := j*numBlocks + b
+					cw[j] = raw[off]
+					cwConf[j] = rawConf[off]
+				}
+				corrected, err := rs.DecodeBlockSoft(cw, cwConf)
+				if err == nil {
+					data := make([]byte, rs.DataBytes)
+					copy(data, cw[:rs.DataBytes])
+					solvedBlocks[b] = data
+					solvedErrs[b] = corrected
+					solvedCount++
+				} else {
+					lastErr = fmt.Errorf("bloco RS %d/%d irrecuperável: %w", b, numBlocks, err)
+				}
+			}
+			if solvedCount == numBlocks {
+				payload := make([]byte, numBlocks*rs.DataBytes)
+				totCorr := 0
+				for b := 0; b < numBlocks; b++ {
+					copy(payload[b*rs.DataBytes:(b+1)*rs.DataBytes], solvedBlocks[b])
+					totCorr += solvedErrs[b]
+				}
+				if int(hdr.PayloadLen) > len(payload) {
+					return nil, fmt.Errorf("frame %d payload_len inválido (%d > %d)", hdr.FrameIndex, hdr.PayloadLen, len(payload))
+				}
+				return &DecodeFrameResult{
+					Header:         hdr,
+					HeaderKind:     HeaderKindHiddenStealth,
+					Payload:        payload[:hdr.PayloadLen],
+					CorrectedBytes: totCorr,
+					RawByteCount:   rawLen,
+				}, nil
+			}
+		}
+	}
+	if !hdrOK {
+		return nil, errors.New("cabeçalho stealth-film irrecuperável mesmo com cancelamento temporal")
+	}
+	return nil, fmt.Errorf("frame %d falhou no resgate temporal (%d/%d blocos RS recuperados): %w", hdr.FrameIndex, solvedCount, numBlocks, lastErr)
+}
+
 
 // ----------------------------------------------------------------------------
 // 4. STEALTH STARRY MASK — FULL-SCREEN TRANSPARENT STARLIGHT OVERLAY (32x30, 3 bits/star!)
@@ -1204,6 +1471,7 @@ func decodeStealthStarsGrid(src *YUVFrame, x0, y0, dw, dh, maxBytes int) []byte 
 	return out
 }
 
+
 func decodeStealthStarsHeaderSlots(src *YUVFrame, w, h int) []byte {
 	totalBytes := stealthTotalBytes("stealth-stars", w, h)
 	if totalBytes < stealthHeaderBytes {
@@ -1247,3 +1515,4 @@ func decodeStealthStarsHeaderSlots(src *YUVFrame, w, h int) []byte {
 	}
 	return out
 }
+

@@ -554,7 +554,7 @@ func (s *Server) resolveOrDownloadVideo(src string, j *BrowserJob) (string, erro
 	// Download from YouTube or any platform supported by yt-dlp (Vimeo, Archive.org, Dailymotion, etc.)
 	tools := media.DetectTools()
 	if !tools.HasYtDlp {
-		return "", errors.New("yt-dlp não encontrado — abra o YTCloud uma vez para instalar FFmpeg/yt-dlp ou instale-os na pasta bin")
+		return "", errors.New("yt-dlp não encontrado — abra o BrightVault uma vez para instalar FFmpeg/yt-dlp ou instale-os na pasta bin")
 	}
 	s.updateJob(j, 10, "Baixando vídeo na qualidade máxima via yt-dlp...", "", "")
 	dlOpts := youtube.YtDlpOptions{
@@ -625,7 +625,7 @@ func (s *Server) MountMultiVideoSite(videoPaths []string, origSource, subPath, d
 			}
 		})
 		if err != nil {
-			return nil, 0, fmt.Errorf("este vídeo não contém um site óptico YTWeb/YTCloud válido: %w", err)
+			return nil, 0, fmt.Errorf("este vídeo não contém um site óptico BrightWeb/BrightVault válido: %w", err)
 		}
 		if isShard, shInfo, sErr := crypto.ParseShardManifest(decRes.EncryptedManifest); isShard {
 			if sErr != nil {
@@ -783,7 +783,7 @@ func (s *Server) MountMultiVideoSite(videoPaths []string, origSource, subPath, d
 	title := extractHTMLTitle(normFiles[entryPath])
 	if title == "" {
 		if ytID := youtube.ExtractVideoID(origSource); ytID != "" {
-			title = "YTWeb · " + ytID
+			title = "BrightWeb · " + ytID
 		} else {
 			title = filepath.Base(origSource)
 		}
@@ -1037,13 +1037,13 @@ func (s *Server) handleNavigate(w http.ResponseWriter, r *http.Request) {
 		ForceReload bool     `json:"force_reload"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Address) == "" {
-		writeError(w, 400, "informe um link de vídeo (YouTube, ytweb:// ou .mp4 local)")
+		writeError(w, 400, "informe um link de vídeo (YouTube, btweb:// ou .mp4 local)")
 		return
 	}
 
 	videoSrcs, subPath, dispAddr := ParseMultiAddress(req.Address)
 	if len(videoSrcs) == 0 {
-		writeError(w, 400, "informe um link de vídeo (YouTube, ytweb:// ou .mp4 local)")
+		writeError(w, 400, "informe um link de vídeo (YouTube, btweb:// ou .mp4 local)")
 		return
 	}
 	joinedSrc := strings.Join(videoSrcs, "|")
