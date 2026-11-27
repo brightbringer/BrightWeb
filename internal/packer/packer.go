@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -25,7 +26,7 @@ import (
 	"ytcloud/internal/sysutil"
 )
 
-// PackedFileEntry describes one file inside a YTCloud video container manifest.
+// PackedFileEntry describes one file inside a YTCloud/BrightVault video container manifest.
 type PackedFileEntry struct {
 	RelPath       string `json:"rel_path"`
 	Name          string `json:"name"`
@@ -34,6 +35,8 @@ type PackedFileEntry struct {
 	StoredSize    int64  `json:"stored_size"`
 	Compressed    bool   `json:"compressed"`
 	InSolidBlock  bool   `json:"in_solid_block,omitempty"` // if true, Offset is inside the decompressed Solid block
+	SolidBlockID  int    `json:"solid_block_id,omitempty"` // 1-based index into ContainerManifest.SolidBlocks (0 = legacy single solid block)
+	LayerDepth    int    `json:"layer_depth,omitempty"`    // folder hierarchy depth (0 = root, 1 = subdir, 2 = nested...)
 	Transform     string `json:"transform,omitempty"`      // "", "delta-pcm16", "webp-lossless"
 	Offset        int64  `json:"offset"`                   // byte offset in container payload blob (or inside Solid block)
 	SHA256        string `json:"sha256"`
@@ -44,6 +47,16 @@ type PackedFileEntry struct {
 	LocalPath     string `json:"-"`                        // not serialized inside YouTube manifest
 }
 
+// LayerSolidBlock describes one independent per-layer Solid Zstd block inside the payload.
+// Grouping compressible text/code per folder layer preserves ~100% Solid compression while
+// unlocking progressive root-first loading and partial blackout isolation!
+type LayerSolidBlock struct {
+	ID         int   `json:"id"` // 1-based ID matching PackedFileEntry.SolidBlockID
+	LayerDepth int   `json:"layer_depth"`
+	Offset     int64 `json:"offset"`
+	StoredSize int64 `json:"stored_size"`
+}
+
 // ContainerManifest is embedded in the Manifest-First frames (first 2-5s of every video).
 type ContainerManifest struct {
 	Version         int               `json:"version"`
@@ -52,9 +65,10 @@ type ContainerManifest struct {
 	ProfileCode     string            `json:"profile_code"`
 	Resolution      string            `json:"resolution"`
 	TotalSize       int64             `json:"total_size"`
-	SolidCompressed bool              `json:"solid_compressed,omitempty"`
+	SolidCompressed bool              `json:"solid_compressed,omitempty"` // legacy single solid block
 	SolidOffset     int64             `json:"solid_offset,omitempty"`
 	SolidStoredSize int64             `json:"solid_stored_size,omitempty"`
+	SolidBlocks     []LayerSolidBlock `json:"solid_blocks,omitempty"` // v3 hybrid per-layer solid blocks
 	Files           []PackedFileEntry `json:"files"`
 	IsCatalog       bool              `json:"is_catalog,omitempty"`
 	CatalogLabel    string            `json:"catalog_label,omitempty"`
@@ -370,23 +384,86 @@ func PackFilesWithOptions(inputs []InputFile, opts PackOptions) (*ContainerManif
 		}
 	}
 
-	// Group solid-eligible files sorted by (ext, relPath) to maximize cross-file zstd dictionary matches!
-	var solidOrder []int
-	for i := range items {
-		if items[i].wantsSolid {
-			solidOrder = append(solidOrder, i)
+	// Compute normalized folder layer depths (strip shared top-level folder prefix if all inputs share one,
+	// e.g. "MySite/index.html" -> depth 0, "MySite/pages/about.html" -> depth 1, "MySite/assets/img/a.jpg" -> depth 2).
+	sharedRoot := ""
+	if len(items) > 1 {
+		firstSlash := strings.Index(items[0].entry.RelPath, "/")
+		if firstSlash > 0 {
+			cand := items[0].entry.RelPath[:firstSlash+1]
+			allShare := true
+			for i := 1; i < len(items); i++ {
+				if !strings.HasPrefix(items[i].entry.RelPath, cand) {
+					allShare = false
+					break
+				}
+			}
+			if allShare {
+				sharedRoot = cand
+			}
 		}
 	}
-	sort.Slice(solidOrder, func(a, b int) bool {
-		ia, ib := solidOrder[a], solidOrder[b]
-		if items[ia].ext != items[ib].ext {
-			return items[ia].ext < items[ib].ext
+
+	maxDepth := 0
+	for i := range items {
+		rel := strings.TrimPrefix(items[i].entry.RelPath, sharedRoot)
+		rel = strings.TrimPrefix(rel, "/")
+		d := strings.Count(rel, "/")
+		items[i].entry.LayerDepth = d
+		if d > maxDepth {
+			maxDepth = d
 		}
-		return items[ia].entry.RelPath < items[ib].entry.RelPath
-	})
+	}
+
+	// BrightNet/3 Critical-Path HTML Promotion (HTTP/2 Priority / Preload Hints):
+	// Parse root index.html for <link href>, <script src>, and <img src> references and promote
+	// referenced small assets (<= 512 KB, even inside subdirs like assets/css/main.css!) into Camada 0!
+	var indexBytes []byte
+	for i := range items {
+		if items[i].entry.LayerDepth == 0 {
+			lowName := strings.ToLower(items[i].entry.Name)
+			if lowName == "index.html" || lowName == "index.htm" {
+				indexBytes = items[i].data
+				break
+			}
+		}
+	}
+	if len(indexBytes) > 0 && len(indexBytes) <= 2*1024*1024 {
+		critRefs := extractCriticalHTMLRefs(string(indexBytes))
+		if len(critRefs) > 0 {
+			for i := range items {
+				if items[i].entry.LayerDepth == 0 || items[i].entry.OriginalSize > 512*1024 {
+					continue
+				}
+				rel := strings.TrimPrefix(items[i].entry.RelPath, sharedRoot)
+				rel = strings.ToLower(strings.TrimPrefix(rel, "/"))
+				if critRefs[rel] {
+					items[i].entry.LayerDepth = 0
+				}
+			}
+		}
+	}
+
+	// Critical-path priority score within each folder layer: index.html -> .html -> .css/.js/.json -> docs -> other
+	layerPriority := func(it preparedItem) int {
+		base := strings.ToLower(it.entry.Name)
+		if it.entry.LayerDepth == 0 && (base == "index.html" || base == "index.htm") {
+			return 100
+		}
+		switch it.ext {
+		case ".html", ".htm":
+			return 80
+		case ".css", ".js", ".mjs", ".json", ".svg", ".woff2":
+			return 70
+		case ".md", ".txt", ".xml", ".yaml", ".yml", ".csv":
+			return 50
+		default:
+			return 20
+		}
+	}
 
 	manifest := &ContainerManifest{
-		Version:     2,
+		Version:     3,
 		ContainerID: opts.ContainerID,
 		ProfileCode: opts.ProfileCode,
 		Resolution:  opts.ResolutionCode,
@@ -394,95 +471,235 @@ func PackFilesWithOptions(inputs []InputFile, opts PackOptions) (*ContainerManif
 	}
 
 	var payload bytes.Buffer
+	const maxLayerSolidRawBytes = 32 * 1024 * 1024 // Cap per-layer solid block at 32 MB for low RAM & fast random access
 
-	const maxSolidRawBytes = 64 * 1024 * 1024 // Cap solid block at 64 MB to keep RAM low & compression fast
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression), zstd.WithEncoderConcurrency(2))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer enc.Close()
 
-	if len(solidOrder) > 0 {
-		var solidTotal int64
-		for _, idx := range solidOrder {
-			solidTotal += int64(len(items[idx].data))
+	// BrightNet/3 Brotli-inspired Zstd Web Dictionary encoder (shrinks HTML/CSS/JS/SVG/JSON by 15%-45%!)
+	encWebDict, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedBetterCompression),
+		zstd.WithEncoderConcurrency(2),
+		zstd.WithEncoderDictRaw(WebDictV1ID, WebDictV1),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer encWebDict.Close()
+
+	encodeBestZstd := func(raw []byte, tryWebDict bool) []byte {
+		plain := enc.EncodeAll(raw, nil)
+		if tryWebDict && len(raw) <= 2*1024*1024 {
+			withDict := encWebDict.EncodeAll(raw, nil)
+			if len(withDict) < len(plain) {
+				return withDict
+			}
+		}
+		return plain
+	}
+
+	// Hybrid Layer-by-Layer Packing (depth 0 -> 1 -> 2 -> ...):
+	//   1) Compressible text/code files at depth d -> 1 mini Solid Zstd block (0% compression loss + instant root!)
+	//   2) Incompressible binary/media files at depth d -> individual self-contained entries sorted Shortest-Job-First!
+	nextBlockID := 1
+	for d := 0; d <= maxDepth; d++ {
+		var solidIdxs []int
+		var binIdxs []int
+		for i := range items {
+			if items[i].entry.LayerDepth != d {
+				continue
+			}
+			if items[i].wantsSolid {
+				solidIdxs = append(solidIdxs, i)
+			} else {
+				binIdxs = append(binIdxs, i)
+			}
 		}
 
-		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression), zstd.WithEncoderConcurrency(2))
-		if err != nil {
-			return nil, nil, err
-		}
+		// 1. Layer d compressible files: sort by (ext, critical priority desc, relPath) for maximum Zstd dictionary hits
+		if len(solidIdxs) > 0 {
+			sort.SliceStable(solidIdxs, func(a, b int) bool {
+				ia, ib := solidIdxs[a], solidIdxs[b]
+				pa, pb := layerPriority(items[ia]), layerPriority(items[ib])
+				if pa != pb {
+					return pa > pb
+				}
+				if items[ia].ext != items[ib].ext {
+					return items[ia].ext < items[ib].ext
+				}
+				return items[ia].entry.RelPath < items[ib].entry.RelPath
+			})
 
-		if solidTotal <= maxSolidRawBytes {
-			var solidRaw bytes.Buffer
-			solidRaw.Grow(int(solidTotal))
-			solidOffsets := make([]int64, len(solidOrder))
-			for k, idx := range solidOrder {
-				solidOffsets[k] = int64(solidRaw.Len())
-				solidRaw.Write(items[idx].data)
+			var layerTotal int64
+			for _, idx := range solidIdxs {
+				layerTotal += int64(len(items[idx].data))
 			}
 
-			solidComp := enc.EncodeAll(solidRaw.Bytes(), nil)
-			enc.Close()
-
-			if len(solidComp) < solidRaw.Len()-64 {
-				manifest.SolidCompressed = true
-				manifest.SolidOffset = int64(payload.Len())
-				manifest.SolidStoredSize = int64(len(solidComp))
-				payload.Write(solidComp)
-				for k, idx := range solidOrder {
-					items[idx].entry.InSolidBlock = true
-					items[idx].entry.Compressed = true
-					items[idx].entry.Offset = solidOffsets[k]
-					items[idx].data = nil
+			if layerTotal <= maxLayerSolidRawBytes {
+				var solidRaw bytes.Buffer
+				solidRaw.Grow(int(layerTotal))
+				solidOffsets := make([]int64, len(solidIdxs))
+				hasWebText := false
+				for k, idx := range solidIdxs {
+					solidOffsets[k] = int64(solidRaw.Len())
+					solidRaw.Write(items[idx].data)
+					switch items[idx].ext {
+					case ".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg", ".xml":
+						hasWebText = true
+					}
 				}
+				solidComp := encodeBestZstd(solidRaw.Bytes(), hasWebText)
+				if len(solidComp) < solidRaw.Len()-32 {
+					bid := nextBlockID
+					nextBlockID++
+					blkOff := int64(payload.Len())
+					payload.Write(solidComp)
+					manifest.SolidBlocks = append(manifest.SolidBlocks, LayerSolidBlock{
+						ID:         bid,
+						LayerDepth: d,
+						Offset:     blkOff,
+						StoredSize: int64(len(solidComp)),
+					})
+					for k, idx := range solidIdxs {
+						items[idx].entry.InSolidBlock = true
+						items[idx].entry.SolidBlockID = bid
+						items[idx].entry.Compressed = true
+						items[idx].entry.Offset = solidOffsets[k]
+						items[idx].data = nil
+					}
+				} else {
+					// Solid didn't save space; write individually
+					for _, idx := range solidIdxs {
+						items[idx].wantsSolid = false
+						if items[idx].entry.Transform == "delta-pcm16" {
+							if orig, dErr := deltaDecodePCM16(items[idx].data); dErr == nil {
+								items[idx].data = orig
+								items[idx].entry.Transform = ""
+								items[idx].entry.StoredSize = int64(len(orig))
+							}
+						}
+						items[idx].entry.Offset = int64(payload.Len())
+						payload.Write(items[idx].data)
+						items[idx].data = nil
+					}
+				}
+				solidRaw.Reset()
 			} else {
-				// Solid compression didn't save space; fall back to direct raw storage (undo delta-pcm16 if any!)
-				for _, idx := range solidOrder {
-					items[idx].wantsSolid = false
-					if items[idx].entry.Transform == "delta-pcm16" {
-						if orig, err := deltaDecodePCM16(items[idx].data); err == nil {
+				// Huge layer (>32 MB compressible): compress per-file within this layer to keep RAM bounded
+				for _, idx := range solidIdxs {
+					comp := enc.EncodeAll(items[idx].data, nil)
+					if len(comp) < len(items[idx].data)-64 {
+						items[idx].data = comp
+						items[idx].entry.Compressed = true
+						items[idx].entry.StoredSize = int64(len(comp))
+					} else if items[idx].entry.Transform == "delta-pcm16" {
+						if orig, dErr := deltaDecodePCM16(items[idx].data); dErr == nil {
 							items[idx].data = orig
 							items[idx].entry.Transform = ""
 							items[idx].entry.StoredSize = int64(len(orig))
 						}
 					}
+					items[idx].entry.Offset = int64(payload.Len())
+					payload.Write(items[idx].data)
+					items[idx].data = nil
 				}
 			}
-			solidRaw.Reset()
-		} else {
-			// Large folder (>64 MB compressible): compress per-file with SpeedBetterCompression to stay within 512 MB RAM!
-			for _, idx := range solidOrder {
-				comp := enc.EncodeAll(items[idx].data, nil)
-				if len(comp) < len(items[idx].data)-64 {
-					items[idx].data = comp
-					items[idx].entry.Compressed = true
-					items[idx].entry.StoredSize = int64(len(comp))
-				} else if items[idx].entry.Transform == "delta-pcm16" {
-					if orig, err := deltaDecodePCM16(items[idx].data); err == nil {
-						items[idx].data = orig
-						items[idx].entry.Transform = ""
-						items[idx].entry.StoredSize = int64(len(orig))
-					}
+		}
+
+		// 2. Layer d binary/media files: Shortest-Job-First (smallest first!) written individually for instant random access
+		if len(binIdxs) > 0 {
+			sort.SliceStable(binIdxs, func(a, b int) bool {
+				ia, ib := binIdxs[a], binIdxs[b]
+				if items[ia].entry.StoredSize != items[ib].entry.StoredSize {
+					return items[ia].entry.StoredSize < items[ib].entry.StoredSize
 				}
+				return items[ia].entry.RelPath < items[ib].entry.RelPath
+			})
+			for _, idx := range binIdxs {
+				items[idx].entry.Offset = int64(payload.Len())
+				payload.Write(items[idx].data)
+				items[idx].data = nil
 			}
-			enc.Close()
 		}
 	}
 
-	// Write all non-solid items sequentially into payload
-	for i := range items {
-		if !items[i].entry.InSolidBlock {
-			items[i].entry.Offset = int64(payload.Len())
-			payload.Write(items[i].data)
-			items[i].data = nil
+	// Preserve manifest.Files in layer-first order (C0 -> C1 -> C2...) for intuitive progressive inspection
+	fileOrder := make([]int, len(items))
+	for i := range fileOrder {
+		fileOrder[i] = i
+	}
+	sort.SliceStable(fileOrder, func(a, b int) bool {
+		ia, ib := items[fileOrder[a]].entry, items[fileOrder[b]].entry
+		if ia.LayerDepth != ib.LayerDepth {
+			return ia.LayerDepth < ib.LayerDepth
 		}
-		manifest.TotalSize += items[i].entry.OriginalSize
-		manifest.Files[i] = items[i].entry
+		if ia.InSolidBlock != ib.InSolidBlock {
+			return ia.InSolidBlock
+		}
+		return ia.Offset < ib.Offset
+	})
+	for outIdx, srcIdx := range fileOrder {
+		manifest.TotalSize += items[srcIdx].entry.OriginalSize
+		manifest.Files[outIdx] = items[srcIdx].entry
 	}
 
 	return manifest, payload.Bytes(), nil
 }
 
-func resolveEntryBytes(manifest *ContainerManifest, payload []byte, solidRaw []byte, f *PackedFileEntry, dec *zstd.Decoder, ffmpegPath string) ([]byte, error) {
+// solidBlockCache lazily decompresses ONLY the exact layer solid block(s) needed (or legacy block 0)!
+type solidBlockCache struct {
+	blocks map[int][]byte
+}
+
+func newSolidBlockCache() *solidBlockCache {
+	return &solidBlockCache{blocks: make(map[int][]byte)}
+}
+
+func (c *solidBlockCache) get(manifest *ContainerManifest, payload []byte, blockID int, dec *zstd.Decoder) ([]byte, error) {
+	if raw, ok := c.blocks[blockID]; ok {
+		return raw, nil
+	}
+	if blockID == 0 {
+		if !manifest.SolidCompressed {
+			return nil, fmt.Errorf("bloco sólido legado ausente no manifesto")
+		}
+		if manifest.SolidOffset < 0 || manifest.SolidOffset+manifest.SolidStoredSize > int64(len(payload)) {
+			return nil, fmt.Errorf("bloco sólido truncado no contêiner")
+		}
+		raw, err := dec.DecodeAll(payload[manifest.SolidOffset:manifest.SolidOffset+manifest.SolidStoredSize], nil)
+		if err != nil {
+			return nil, fmt.Errorf("erro descomprimindo bloco sólido zstd: %w", err)
+		}
+		c.blocks[0] = raw
+		return raw, nil
+	}
+	for _, blk := range manifest.SolidBlocks {
+		if blk.ID == blockID {
+			if blk.Offset < 0 || blk.Offset+blk.StoredSize > int64(len(payload)) {
+				return nil, fmt.Errorf("bloco sólido da camada %d (ID %d) truncado no contêiner", blk.LayerDepth, blk.ID)
+			}
+			raw, err := dec.DecodeAll(payload[blk.Offset:blk.Offset+blk.StoredSize], nil)
+			if err != nil {
+				return nil, fmt.Errorf("erro descomprimindo bloco sólido da camada %d: %w", blk.LayerDepth, err)
+			}
+			c.blocks[blockID] = raw
+			return raw, nil
+		}
+	}
+	return nil, fmt.Errorf("bloco sólido ID %d não encontrado no manifesto", blockID)
+}
+
+func resolveEntryBytes(manifest *ContainerManifest, payload []byte, cache *solidBlockCache, f *PackedFileEntry, dec *zstd.Decoder, ffmpegPath string) ([]byte, error) {
 	var raw []byte
 	var err error
 	if f.InSolidBlock {
+		solidRaw, sErr := cache.get(manifest, payload, f.SolidBlockID, dec)
+		if sErr != nil {
+			return nil, sErr
+		}
 		if f.Offset < 0 || f.Offset+f.StoredSize > int64(len(solidRaw)) {
 			return nil, fmt.Errorf("offset sólido inválido para %s", f.RelPath)
 		}
@@ -526,10 +743,43 @@ func resolveEntryBytes(manifest *ContainerManifest, payload []byte, solidRaw []b
 	return raw, nil
 }
 
+// newPackerZstdDecoder creates a Zstd decoder pre-loaded with BrightNet/3's WebDictV1
+// (seamlessly decoding both standard dict-less Zstd v1/v2/v3 blocks AND WebDictV1 blocks!).
+func newPackerZstdDecoder() (*zstd.Decoder, error) {
+	return zstd.NewReader(nil, zstd.WithDecoderDictRaw(WebDictV1ID, WebDictV1))
+}
+
+var reHTMLAssetRef = regexp.MustCompile(`(?i)(?:href|src)\s*=\s*["']([^"'#?]+)["']`)
+
+func extractCriticalHTMLRefs(htmlText string) map[string]bool {
+	matches := reHTMLAssetRef.FindAllStringSubmatch(htmlText, 128)
+	if len(matches) == 0 {
+		return nil
+	}
+	refs := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		raw := strings.TrimSpace(m[1])
+		low := strings.ToLower(raw)
+		if raw == "" || strings.HasPrefix(low, "http://") || strings.HasPrefix(low, "https://") ||
+			strings.HasPrefix(low, "//") || strings.HasPrefix(low, "data:") || strings.HasPrefix(low, "javascript:") ||
+			strings.HasPrefix(low, "btweb://") || strings.HasPrefix(low, "ytweb://") {
+			continue
+		}
+		clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean("/"+raw)), "/")
+		if clean != "" {
+			refs[strings.ToLower(clean)] = true
+		}
+	}
+	return refs
+}
+
 // ExtractFiles extracts all (or only selectedRelPaths if non-empty) files from a decrypted container payload.
-// Returns the list of extracted destination paths.
+// Lazily decompresses ONLY the layer solid blocks required by the requested files!
 func ExtractFiles(manifest *ContainerManifest, payload []byte, destDir string, selectedRelPaths map[string]bool, dateOverrides map[string]string, ffmpegPath ...string) ([]string, error) {
-	dec, err := zstd.NewReader(nil)
+	dec, err := newPackerZstdDecoder()
 	if err != nil {
 		return nil, err
 	}
@@ -540,17 +790,7 @@ func ExtractFiles(manifest *ContainerManifest, payload []byte, destDir string, s
 		ff = ffmpegPath[0]
 	}
 
-	var solidRaw []byte
-	if manifest.SolidCompressed {
-		if manifest.SolidOffset < 0 || manifest.SolidOffset+manifest.SolidStoredSize > int64(len(payload)) {
-			return nil, fmt.Errorf("bloco sólido truncado no contêiner")
-		}
-		solidRaw, err = dec.DecodeAll(payload[manifest.SolidOffset:manifest.SolidOffset+manifest.SolidStoredSize], nil)
-		if err != nil {
-			return nil, fmt.Errorf("erro descomprimindo bloco sólido zstd: %w", err)
-		}
-	}
-
+	cache := newSolidBlockCache()
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -561,7 +801,7 @@ func ExtractFiles(manifest *ContainerManifest, payload []byte, destDir string, s
 		if len(selectedRelPaths) > 0 && !selectedRelPaths[f.RelPath] {
 			continue
 		}
-		raw, err := resolveEntryBytes(manifest, payload, solidRaw, f, dec, ff)
+		raw, err := resolveEntryBytes(manifest, payload, cache, f, dec, ff)
 		if err != nil {
 			return nil, err
 		}
@@ -591,9 +831,9 @@ func ExtractFiles(manifest *ContainerManifest, payload []byte, destDir string, s
 	return extracted, nil
 }
 
-// ExtractSingleBytes extracts a single file from decrypted payload into memory.
+// ExtractSingleBytes extracts a single file from decrypted payload into memory (lazy layer decompression!).
 func ExtractSingleBytes(manifest *ContainerManifest, payload []byte, relPath string, ffmpegPath ...string) ([]byte, *PackedFileEntry, error) {
-	dec, err := zstd.NewReader(nil)
+	dec, err := newPackerZstdDecoder()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -604,23 +844,13 @@ func ExtractSingleBytes(manifest *ContainerManifest, payload []byte, relPath str
 		ff = ffmpegPath[0]
 	}
 
-	var solidRaw []byte
-	if manifest.SolidCompressed {
-		if manifest.SolidOffset < 0 || manifest.SolidOffset+manifest.SolidStoredSize > int64(len(payload)) {
-			return nil, nil, fmt.Errorf("bloco sólido truncado no contêiner")
-		}
-		solidRaw, err = dec.DecodeAll(payload[manifest.SolidOffset:manifest.SolidOffset+manifest.SolidStoredSize], nil)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
+	cache := newSolidBlockCache()
 	for i := range manifest.Files {
 		f := &manifest.Files[i]
 		if f.RelPath != relPath {
 			continue
 		}
-		raw, err := resolveEntryBytes(manifest, payload, solidRaw, f, dec, ff)
+		raw, err := resolveEntryBytes(manifest, payload, cache, f, dec, ff)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -631,7 +861,7 @@ func ExtractSingleBytes(manifest *ContainerManifest, payload []byte, relPath str
 
 // ExtractAllToMemory unpacks all files from a container payload directly into RAM with full SHA-256 verification.
 func ExtractAllToMemory(manifest *ContainerManifest, payload []byte, ffmpegPath ...string) (map[string][]byte, error) {
-	dec, err := zstd.NewReader(nil)
+	dec, err := newPackerZstdDecoder()
 	if err != nil {
 		return nil, err
 	}
@@ -642,21 +872,11 @@ func ExtractAllToMemory(manifest *ContainerManifest, payload []byte, ffmpegPath 
 		ff = ffmpegPath[0]
 	}
 
-	var solidRaw []byte
-	if manifest.SolidCompressed {
-		if manifest.SolidOffset < 0 || manifest.SolidOffset+manifest.SolidStoredSize > int64(len(payload)) {
-			return nil, fmt.Errorf("bloco sólido truncado no contêiner")
-		}
-		solidRaw, err = dec.DecodeAll(payload[manifest.SolidOffset:manifest.SolidOffset+manifest.SolidStoredSize], nil)
-		if err != nil {
-			return nil, fmt.Errorf("erro descomprimindo bloco sólido zstd: %w", err)
-		}
-	}
-
+	cache := newSolidBlockCache()
 	out := make(map[string][]byte, len(manifest.Files))
 	for i := range manifest.Files {
 		f := &manifest.Files[i]
-		raw, err := resolveEntryBytes(manifest, payload, solidRaw, f, dec, ff)
+		raw, err := resolveEntryBytes(manifest, payload, cache, f, dec, ff)
 		if err != nil {
 			return nil, err
 		}
@@ -664,6 +884,221 @@ func ExtractAllToMemory(manifest *ContainerManifest, payload []byte, ffmpegPath 
 		out[cleanRel] = raw
 	}
 	return out, nil
+}
+
+// ProgressiveUnpacker incrementally extracts and SHA-256-verifies files from a growing
+// contiguous payload prefix as frames stream live (Camada 0 -> Camada 1 -> Camada 2 -> ...).
+type ProgressiveUnpacker struct {
+	manifest   *ContainerManifest
+	ffmpegPath string
+	dec        *zstd.Decoder
+	cache      *solidBlockCache
+	extracted  map[string]bool
+	blockBounds map[int][2]int64 // blockID -> [offset, end]
+}
+
+// NewProgressiveUnpacker initializes a stateful progressive extractor for a decoded ContainerManifest.
+func NewProgressiveUnpacker(manifest *ContainerManifest, ffmpegPath string) (*ProgressiveUnpacker, error) {
+	dec, err := newPackerZstdDecoder()
+	if err != nil {
+		return nil, err
+	}
+	bounds := make(map[int][2]int64, len(manifest.SolidBlocks)+1)
+	if manifest.SolidCompressed {
+		bounds[0] = [2]int64{manifest.SolidOffset, manifest.SolidOffset + manifest.SolidStoredSize}
+	}
+	for _, blk := range manifest.SolidBlocks {
+		bounds[blk.ID] = [2]int64{blk.Offset, blk.Offset + blk.StoredSize}
+	}
+	return &ProgressiveUnpacker{
+		manifest:    manifest,
+		ffmpegPath:  ffmpegPath,
+		dec:         dec,
+		cache:       newSolidBlockCache(),
+		extracted:   make(map[string]bool, len(manifest.Files)),
+		blockBounds: bounds,
+	}, nil
+}
+
+// MarkExtracted marks a manifest file as already satisfied (e.g. from BrightNet/3's SHA-256 CAS cache).
+func (u *ProgressiveUnpacker) MarkExtracted(relPath string) {
+	if u != nil {
+		u.extracted[relPath] = true
+	}
+}
+
+// FeedSparse implements BrightNet/3 HTTP/3-style Zero Head-of-Line Blocking extraction:
+// any file or LayerSolidBlock whose specific frame interval [firstFrame..lastFrame] has arrived
+// in `frames` is unlocked immediately, even if an earlier frame failed and is waiting for Cross-Frame RS!
+func (u *ProgressiveUnpacker) FeedSparse(frames map[uint32][]byte, startFrameIdx uint32, frameChunkSize int) (map[string][]byte, error) {
+	if u == nil || frameChunkSize <= 0 || len(frames) == 0 {
+		return nil, nil
+	}
+	cs := int64(frameChunkSize)
+	readRange := func(off, sz int64) ([]byte, bool) {
+		if off < 0 || sz < 0 {
+			return nil, false
+		}
+		if sz == 0 {
+			return []byte{}, true
+		}
+		firstF := int(off / cs)
+		lastF := int((off + sz - 1) / cs)
+		out := make([]byte, sz)
+		written := int64(0)
+		for fi := firstF; fi <= lastF; fi++ {
+			chunk, ok := frames[startFrameIdx+uint32(fi)]
+			if !ok {
+				return nil, false
+			}
+			fStart := int64(fi) * cs
+			sliceStart := int64(0)
+			if off > fStart {
+				sliceStart = off - fStart
+			}
+			need := sz - written
+			avail := int64(len(chunk)) - sliceStart
+			if avail <= 0 {
+				return nil, false
+			}
+			take := need
+			if avail < take {
+				take = avail
+			}
+			copy(out[written:written+take], chunk[sliceStart:sliceStart+take])
+			written += take
+		}
+		if written != sz {
+			return nil, false
+		}
+		return out, true
+	}
+
+	var newlyUnlocked map[string][]byte
+	for i := range u.manifest.Files {
+		f := &u.manifest.Files[i]
+		if u.extracted[f.RelPath] {
+			continue
+		}
+		var raw []byte
+		var err error
+		if f.InSolidBlock {
+			solidRaw, ok := u.cache.blocks[f.SolidBlockID]
+			if !ok {
+				b, hasB := u.blockBounds[f.SolidBlockID]
+				if !hasB {
+					continue
+				}
+				compSlice, ready := readRange(b[0], b[1]-b[0])
+				if !ready {
+					continue
+				}
+				solidRaw, err = u.dec.DecodeAll(compSlice, nil)
+				if err != nil {
+					return newlyUnlocked, err
+				}
+				u.cache.blocks[f.SolidBlockID] = solidRaw
+			}
+			if f.Offset < 0 || f.Offset+f.StoredSize > int64(len(solidRaw)) {
+				return newlyUnlocked, fmt.Errorf("offset sólido inválido para %s", f.RelPath)
+			}
+			raw = solidRaw[f.Offset : f.Offset+f.StoredSize]
+		} else {
+			stored, ready := readRange(f.Offset, f.StoredSize)
+			if !ready {
+				continue
+			}
+			raw = stored
+			if f.Compressed {
+				raw, err = u.dec.DecodeAll(stored, nil)
+				if err != nil {
+					return newlyUnlocked, fmt.Errorf("erro descomprimindo %s: %w", f.RelPath, err)
+				}
+			}
+		}
+
+		// Apply reversible transforms & strict SHA-256 verification
+		switch f.Transform {
+		case "delta-pcm16":
+			raw, err = deltaDecodePCM16(raw)
+			if err != nil {
+				return newlyUnlocked, fmt.Errorf("erro revertendo delta-pcm16 em %s: %w", f.RelPath, err)
+			}
+			if f.SHA256 != "" && crypto.SHA256Hex(raw) != f.SHA256 {
+				return newlyUnlocked, fmt.Errorf("integridade SHA-256 falhou para %s", f.RelPath)
+			}
+		case "webp-lossless":
+			if f.StoredSHA256 != "" && crypto.SHA256Hex(raw) != f.StoredSHA256 {
+				return newlyUnlocked, fmt.Errorf("integridade WebP Lossless falhou para %s", f.RelPath)
+			}
+			raw, err = convertWebPLosslessToPNG(u.ffmpegPath, raw)
+			if err != nil {
+				return newlyUnlocked, fmt.Errorf("erro restaurando PNG de WebP Lossless em %s: %w", f.RelPath, err)
+			}
+		default:
+			if f.SHA256 != "" && crypto.SHA256Hex(raw) != f.SHA256 {
+				return newlyUnlocked, fmt.Errorf("integridade SHA-256 falhou para %s", f.RelPath)
+			}
+		}
+
+		u.extracted[f.RelPath] = true
+		if newlyUnlocked == nil {
+			newlyUnlocked = make(map[string][]byte)
+		}
+		cleanRel := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(filepath.FromSlash(f.RelPath))), "/")
+		newlyUnlocked[cleanRel] = raw
+	}
+	return newlyUnlocked, nil
+}
+
+// Close releases the underlying Zstd decoder resources.
+func (u *ProgressiveUnpacker) Close() {
+	if u != nil && u.dec != nil {
+		u.dec.Close()
+		u.dec = nil
+	}
+}
+
+// Feed inspects a growing contiguous payload prefix and extracts every file whose bytes
+// (or enclosing LayerSolidBlock) have fully arrived, returning newly unlocked normalized files.
+func (u *ProgressiveUnpacker) Feed(contiguousPayload []byte) (map[string][]byte, error) {
+	avail := int64(len(contiguousPayload))
+	var newlyUnlocked map[string][]byte
+	for i := range u.manifest.Files {
+		f := &u.manifest.Files[i]
+		if u.extracted[f.RelPath] {
+			continue
+		}
+		if f.InSolidBlock {
+			b, ok := u.blockBounds[f.SolidBlockID]
+			if !ok || b[0] < 0 || b[1] > avail {
+				continue
+			}
+		} else {
+			if f.Offset < 0 || f.Offset+f.StoredSize > avail {
+				continue
+			}
+		}
+		raw, err := resolveEntryBytes(u.manifest, contiguousPayload, u.cache, f, u.dec, u.ffmpegPath)
+		if err != nil {
+			return newlyUnlocked, err
+		}
+		u.extracted[f.RelPath] = true
+		if newlyUnlocked == nil {
+			newlyUnlocked = make(map[string][]byte)
+		}
+		cleanRel := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(filepath.FromSlash(f.RelPath))), "/")
+		newlyUnlocked[cleanRel] = raw
+	}
+	return newlyUnlocked, nil
+}
+
+// ExtractedCount returns how many files have been unlocked and verified so far.
+func (u *ProgressiveUnpacker) ExtractedCount() int {
+	if u == nil {
+		return 0
+	}
+	return len(u.extracted)
 }
 
 func MarshalManifest(m *ContainerManifest) ([]byte, error) {

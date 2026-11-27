@@ -1,0 +1,1515 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrightVault — Cofre Óptico Criptografado 4K</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/i18n.js"></script>
+</head>
+
+<body>
+  <!-- AUTH / UNLOCK SCREEN -->
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-card">
+      <div class="brand-hero">
+        <img src="/favicon.png" class="logo-badge-img" alt="BrightVault">
+        <div>
+          <h1>BrightVault <span class="pill-8k">4K</span></h1>
+          <p class="muted" data-i18n="app_subtitle">Cofre Óptico · Argon2id + Cascata Pós-Quântica (AES-256 + XChaCha20) + Keyfile</p>
+        </div>
+      </div>
+
+      <div id="auth-tabs" class="tabs">
+        <button class="tab active" data-auth-tab="unlock" id="tab-unlock-btn" data-i18n="tab_unlock">Desbloquear Cofre</button>
+        <button class="tab" data-auth-tab="create" id="tab-create-btn" data-i18n="tab_create">Criar Novo Cofre</button>
+        <button class="tab" data-auth-tab="restore" data-i18n="tab_restore">Restaurar de Backup</button>
+      </div>
+
+      <form id="form-unlock" class="auth-form">
+        <div id="remembered-box" class="hint-box hidden">
+          <div>🔑 Senha salva com segurança (Windows DPAPI) neste computador.</div>
+          <div class="row-2" style="margin-top:8px">
+            <button type="button" class="btn primary sm" id="btn-unlock-remembered">🔓 Entrar Agora</button>
+            <button type="button" class="btn danger-ghost sm" id="btn-forget-saved">Esquecer Senha</button>
+          </div>
+        </div>
+        <label data-i18n="master_password">Senha Mestra do Cofre</label>
+        <input type="password" id="unlock-password" data-i18n-ph="enter_master_ph" placeholder="Digite sua senha mestra" required
+          autocomplete="current-password">
+        <div id="unlock-keyfile-wrap" class="hidden" style="margin-top:6px">
+          <label id="unlock-keyfile-label">🔑 Arquivo-Chave Local (2º Fator obrigatório)</label>
+          <div class="row-inline">
+            <input type="text" id="unlock-keyfile-path" placeholder="Selecione o arquivo-chave (.ytkey ou arquivo usado)">
+            <button type="button" class="btn sm" id="btn-unlock-pick-kf">📁 Escolher</button>
+          </div>
+        </div>
+        <label class="check-row"><input type="checkbox" id="unlock-remember" checked> <span data-i18n="remember_pw">Lembrar minha senha neste computador (criptografada via Windows DPAPI)</span></label>
+        <button type="submit" class="btn primary full" data-i18n="btn_unlock">Desbloquear Cofre</button>
+      </form>
+
+      <form id="form-create" class="auth-form hidden">
+        <label>Nome do Cofre</label>
+        <input type="text" id="create-name" value="Meu Cofre" required>
+        <label>Senha Mestra (use uma senha forte!)</label>
+        <input type="password" id="create-password" placeholder="Mínimo 8 caracteres recomendados" required>
+        <label>Confirmar Senha</label>
+        <input type="password" id="create-password2" placeholder="Repita a senha mestra" required>
+        <label>🔑 Arquivo-Chave Local — 2º Fator Anti-IA (Opcional)</label>
+        <div class="row-inline">
+          <input type="text" id="create-keyfile-path" placeholder="Opcional: qualquer arquivo ou gere um .ytkey">
+          <button type="button" class="btn sm" id="btn-create-gen-kf" title="Gerar arquivo-chave aleatório de 512 bits">✨ Gerar</button>
+          <button type="button" class="btn sm" id="btn-create-pick-kf" title="Escolher qualquer arquivo existente">📁</button>
+        </div>
+        <label class="check-row"><input type="checkbox" id="create-remember" checked> <span data-i18n="remember_pw">Lembrar minha senha neste computador (criptografada via Windows DPAPI)</span></label>
+        <div class="hint-box">🛡️ <b>Zero-Knowledge Pós-Quântico:</b> Argon2id + HKDF-SHA512 + dupla camada <b>AES-256-GCM + XChaCha20-Poly1305</b>. Se usar Arquivo-Chave, guarde uma cópia dele fora do PC!</div>
+        <button type="submit" class="btn primary full" data-i18n="btn_create_vault">Criar Cofre Criptografado</button>
+      </form>
+
+      <form id="form-restore" class="auth-form hidden">
+        <label>Link do Vídeo-Índice no YouTube (ou caminho local .mp4 / .ytcat)</label>
+        <input type="text" id="restore-source"
+          placeholder="https://www.youtube.com/watch?v=... ou C:\...\catalogo.ytcat">
+        <label>Ou selecione um arquivo .ytcat local</label>
+        <input type="file" id="restore-file" accept=".ytcat">
+        <label>Senha Mestra do Backup</label>
+        <input type="password" id="restore-password" placeholder="Senha usada ao criar o backup" required>
+        <button type="submit" class="btn primary full" data-i18n="btn_restore">Restaurar Organização neste PC</button>
+      </form>
+
+      <div id="auth-error" class="alert error hidden"></div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);text-align:center">
+        <button type="button" class="btn full" id="btn-auth-public-dl" data-i18n="btn_public_dl_auth" style="justify-content:center">🌐 Download Público (Link + Senha ou Código de Pasta)</button>
+      </div>
+      <div class="hint-box" style="margin-top:10px;font-size:11px;line-height:1.45;text-align:left">
+        <b>🔬 Pesquisa Científica &amp; White-Hat:</b> O <b>BrightVault</b> é um projeto aberto de estudo sobre integridade e sobrevivência de dados binários após compressão severa em codecs de vídeo (H.264/VP9/AV1), códigos corretores de erros Reed-Solomon (intra-frame e inter-frame) e criptografia defensiva local. Todo processamento é 100% local e educacional.
+      </div>
+      <div id="auth-tools-status" class="auth-footer muted"></div>
+    </div>
+  </div>
+
+  <!-- MAIN WORKSPACE -->
+  <div id="app-shell" class="app-shell hidden">
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <img src="/favicon.png" class="logo-sm-img" alt="BrightVault">
+        <strong id="vault-title">BrightVault</strong>
+        <span class="badge" id="stats-badge">0 arquivos</span>
+        <button type="button" class="ver-pill" id="bv-update-btn" title="Versão do BrightVault — clique para verificar ou atualizar pelo GitHub">v0.701</button>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="btn primary" id="btn-open-upload" data-i18n="btn_upload">+ Enviar</button>
+        <button class="btn" id="btn-open-sync" data-i18n="btn_sync" title="Sincronização Incremental por Pasta (Vídeos de Atualização Delta)">🔄 Atualizar Pasta</button>
+        <button class="btn" id="btn-open-peek" data-i18n="btn_peek" title="Ver conteúdo e baixar de qualquer vídeo do seu cofre">🔍 Inspecionar Vídeo</button>
+        <button class="btn" id="btn-open-public-dl" data-i18n="btn_public_dl" title="Baixar qualquer vídeo público ou código de pasta">🌐 Download Público</button>
+        <button class="btn perf-trigger-btn" id="btn-toggle-perf" title="Aba Flutuante de Desempenho (CPU %, RAM %, Prioridade e Presets Rápidos)">⚡ <span id="perf-pill-label" data-i18n="btn_perf">Desempenho</span></button>
+        <button class="btn" id="btn-open-settings" title="Configurações, Temas, Idioma e YouTube API">⚙️</button>
+        <button class="btn danger-ghost" id="btn-lock" title="Bloquear Cofre">🔒</button>
+        <button class="btn danger-ghost" id="btn-shutdown" title="Encerrar BrightVault completamente">⏻</button>
+      </div>
+    </header>
+
+    <!-- ABA FLUTUANTE DE DESEMPENHO (CPU%, RAM%, PRESETS RÁPIDOS & RECURSOS) -->
+    <div id="perf-floating-panel" class="perf-float hidden" role="dialog" aria-label="Desempenho do BrightVault">
+      <div class="perf-float-head">
+        <div>
+          <strong>⚡ Desempenho &amp; Recursos do PC</strong>
+          <div id="perf-hw-subtitle" class="muted" style="font-size:11px">Detectando CPU e RAM...</div>
+        </div>
+        <button type="button" class="btn-mini" id="btn-close-perf" title="Fechar">✕</button>
+      </div>
+
+      <div class="perf-float-body">
+        <div class="perf-section-lbl">Predefinição Rápida (1 clique)</div>
+        <div class="perf-presets">
+          <button type="button" class="perf-preset-btn" data-perf-preset="max">
+            <span class="perf-p-ico">🚀</span>
+            <b>Máximo</b>
+            <span>100% CPU · 80% RAM</span>
+          </button>
+          <button type="button" class="perf-preset-btn" data-perf-preset="balanced">
+            <span class="perf-p-ico">⚖️</span>
+            <b>Equilibrado</b>
+            <span>50% CPU · 45% RAM</span>
+          </button>
+          <button type="button" class="perf-preset-btn" data-perf-preset="min">
+            <span class="perf-p-ico">🍃</span>
+            <b>Mínimo</b>
+            <span>25% CPU · 20% RAM</span>
+          </button>
+        </div>
+
+        <div class="perf-slider-group">
+          <div class="perf-slider-head">
+            <span>🧠 Limite Máximo de CPU</span>
+            <strong id="perf-cpu-val">50% (— threads)</strong>
+          </div>
+          <input type="range" id="perf-cpu-pct" min="10" max="100" step="5" value="50">
+        </div>
+
+        <div class="perf-slider-group">
+          <div class="perf-slider-head">
+            <span>💾 Limite Máximo de RAM</span>
+            <strong id="perf-ram-val">45% (— MB)</strong>
+          </div>
+          <input type="range" id="perf-ram-pct" min="10" max="85" step="5" value="45">
+        </div>
+
+        <div class="perf-toggles">
+          <label class="check-row" style="margin:0;align-items:flex-start">
+            <input type="checkbox" id="perf-bg-mode" checked style="margin-top:2px">
+            <span><b>🌙 Modo Segundo Plano</b><br><span class="muted" style="font-size:10.5px">Prioridade baixa no Windows (não trava jogos/navegador).</span></span>
+          </label>
+          <label class="check-row" style="margin:0;align-items:flex-start">
+            <input type="checkbox" id="perf-opt-png" style="margin-top:2px">
+            <span><b>🖼️ Otimizar PNG sem perda (WebP Lossless)</b><br><span class="muted" style="font-size:10.5px">Reduz PNGs em 38–97% com pixels 100% idênticos.</span></span>
+          </label>
+          <div>
+            <label style="margin-top:2px;font-size:11px">🧹 Limpeza de Vídeos Temporários Locais</label>
+            <select id="perf-cleanup">
+              <option value="safe_after_verify">Seguro: deletar vídeo local após verificar online</option>
+              <option value="immediate_after_upload">Econômico: deletar logo após o upload</option>
+              <option value="keep">Manter vídeo local na pasta staging</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="perf-float-foot">
+        <span id="perf-live-badge" class="muted" style="font-size:11px">Multicore ativo</span>
+        <button type="button" class="btn primary sm" id="btn-save-perf">💾 Aplicar Agora</button>
+      </div>
+    </div>
+
+    <!-- 3-COLUMN BODY -->
+    <div class="workspace">
+      <!-- LEFT SIDEBAR -->
+      <aside class="sidebar">
+        <div id="tools-warning" class="tools-banner hidden">
+          <div id="tools-warning-text">FFmpeg / yt-dlp ausentes</div>
+          <button class="btn primary sm full" id="btn-install-tools">Instalar Automaticamente</button>
+        </div>
+
+        <!-- PROFILE BACKUP STATUS CARD (ABOVE FOLDERS!) -->
+        <div id="profile-card" class="profile-card profile-none" role="button" tabindex="0">
+          <div class="profile-card-head">
+            <strong id="profile-card-title">☁️ Backup do Perfil</strong>
+            <span id="profile-card-pill" class="profile-pill">Não criado</span>
+          </div>
+          <div id="profile-card-msg" class="profile-card-msg">
+            Crie o backup do seu perfil assim que fizer seus backups para restaurar pastas, datas e links em qualquer PC.
+          </div>
+          <button type="button" class="btn sm full" id="btn-open-catalog">☁️ Gerenciar Backup do Perfil</button>
+        </div>
+
+        <section class="side-section">
+          <div class="side-header">
+            <span data-i18n="sec_folders">📁 Pastas</span>
+            <button class="btn-mini" id="btn-new-folder" title="Nova Pasta">+</button>
+          </div>
+          <div id="folder-tree" class="side-list"></div>
+        </section>
+
+        <section class="side-section">
+          <div class="side-header">
+            <span data-i18n="sec_collections">⭐ Coleções</span>
+            <button class="btn-mini" id="btn-new-collection" title="Nova Coleção">+</button>
+          </div>
+          <div id="collection-list" class="side-list"></div>
+        </section>
+
+        <section class="side-section">
+          <div class="side-header"><span data-i18n="sec_timeline">📅 Linha do Tempo</span></div>
+          <div id="year-list" class="pill-wrap"></div>
+          <button class="side-item sm" id="btn-filter-nodate" data-i18n="no_date">❓ Sem data definida</button>
+        </section>
+
+        <section class="side-section">
+          <div class="side-header"><span data-i18n="sec_tags">🏷️ Tags</span></div>
+          <div id="tag-list" class="pill-wrap"></div>
+        </section>
+
+        <section class="side-section">
+          <div class="side-header"><span data-i18n="sec_videos">🎬 Vídeos / Contêineres</span></div>
+          <div id="videos-summary-card" class="videos-summary-card" role="button" tabindex="0" title="Clique para abrir Meus Vídeos">
+            <div class="vsum-stats">
+              <div class="vsum-stat vsum-pending">
+                <span class="vsum-num" id="vsum-pending-count">0</span>
+                <span class="vsum-lbl" data-i18n="vsum_pending">⏳ Pendentes</span>
+              </div>
+              <div class="vsum-stat vsum-sent">
+                <span class="vsum-num" id="vsum-sent-count">0</span>
+                <span class="vsum-lbl" data-i18n="vsum_sent">✅ Enviados</span>
+              </div>
+            </div>
+            <div class="vsum-actions">
+              <button type="button" class="btn primary sm full" id="btn-upload-all-videos" data-i18n="btn_upload_all">🚀 Enviar Todos</button>
+              <button type="button" class="btn sm full" id="btn-open-my-videos" data-i18n="btn_my_videos">🎬 Meus Vídeos</button>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <!-- CENTER CONTENT -->
+      <main class="main-pane" id="drop-zone">
+        <div id="pending-dl-banner" class="pending-dl-banner hidden"></div>
+        <div id="pending-yt-banner" class="pending-banner hidden"></div>
+        <div class="main-toolbar">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div id="breadcrumb" class="breadcrumb" data-i18n="all_files">Todos os Arquivos</div>
+            <div class="view-toggle">
+              <button class="btn icon sm active" data-view="grid" title="Grade">▦</button>
+              <button class="btn icon sm" data-view="list" title="Lista">☰</button>
+              <button class="btn icon sm" data-view="timeline" title="Linha do Tempo / Recentes">◷</button>
+            </div>
+            <button class="btn sm" id="btn-select-all" data-i18n="select_all"
+              title="Selecionar ou desmarcar todos os arquivos visíveis (Ctrl+A)">☑️ Selecionar Todos</button>
+            <button class="btn sm" id="btn-props-current-folder" data-i18n="folder_props"
+              title="Editar pasta, ver chave, criar Pasta Mãe ou gerar código de compartilhamento">✏️ Pasta / Compartilhar</button>
+          </div>
+          <div id="batch-bar" class="batch-bar hidden">
+            <span id="batch-count">0 selecionados</span>
+            <button class="btn sm" id="btn-batch-meta" data-i18n="btn_edit_meta">✏️ Editar Metadados</button>
+            <button class="btn sm primary" id="btn-batch-extract" data-i18n="btn_download">⬇️ Baixar</button>
+            <button class="btn sm danger-ghost" id="btn-batch-free" data-i18n="btn_free_hd">🧹 Liberar HD</button>
+            <button class="btn sm danger-ghost" id="btn-batch-delete" data-i18n="btn_delete">🗑️ Excluir</button>
+            <button class="btn sm" id="btn-batch-clear">✕</button>
+          </div>
+        </div>
+
+        <div class="search-bar-row">
+          <div class="search-wrap">
+            <input type="text" id="search-input" data-i18n-ph="search_ph" placeholder="🔍 Buscar por nome, local, tag ou nota...">
+            <select id="filter-media">
+              <option value="" data-i18n="all_types">Todos os tipos</option>
+              <option value="image" data-i18n="type_image">Fotos</option>
+              <option value="video" data-i18n="type_video">Vídeos</option>
+              <option value="document" data-i18n="type_doc">Documentos</option>
+              <option value="audio" data-i18n="type_audio">Áudios</option>
+            </select>
+            <input type="text" id="filter-date-from" placeholder="De (ex: 1998)" class="date-sm"
+              title="Data inicial (AAAA ou AAAA-MM-DD)">
+            <input type="text" id="filter-date-to" placeholder="Até (ex: 2005)" class="date-sm"
+              title="Data final (AAAA ou AAAA-MM-DD)">
+            <select id="sort-select">
+              <option value="date_desc" data-i18n="sort_date_desc">Mais recentes</option>
+              <option value="date_asc" data-i18n="sort_date_asc">Mais antigos</option>
+              <option value="name_asc" data-i18n="sort_name">Nome A–Z</option>
+              <option value="size_desc" data-i18n="sort_size">Maior tamanho</option>
+              <option value="added_desc" data-i18n="sort_added">Adicionados por último</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="files-viewport" class="files-viewport"></div>
+
+        <!-- JOBS BAR -->
+        <div id="jobs-drawer" class="jobs-drawer hidden">
+          <div class="jobs-header">
+            <span>⚡ Fila de Tarefas</span>
+            <button class="btn-mini" id="btn-toggle-jobs">✕</button>
+          </div>
+          <div id="jobs-list" class="jobs-list"></div>
+        </div>
+      </main>
+
+      <!-- RIGHT INSPECTOR & PRE-DOWNLOAD VIEWER -->
+      <aside class="inspector" id="inspector-pane">
+        <div id="inspector-empty" class="inspector-empty">
+          <div class="empty-ico">👁️</div>
+          <h3 data-i18n="insp_empty_title">Visualizador Pré-Download</h3>
+          <p class="muted" data-i18n="insp_empty_desc">Clique em qualquer arquivo para visualizar sua prévia, abrir no Windows, editar metadados ou descompilar do YouTube.</p>
+        </div>
+
+        <div id="inspector-content" class="inspector-content hidden">
+          <div class="inspector-top-bar">
+            <span id="insp-header-name" class="insp-header-name">Arquivo</span>
+            <button type="button" class="btn-mini" id="btn-close-inspector" data-i18n-title="close_panel" title="Fechar arquivo">✕</button>
+          </div>
+          <div class="preview-box" id="preview-box"></div>
+          <div class="inspector-actions">
+            <div class="row-2">
+              <button class="btn primary" id="btn-open-one" data-i18n="btn_open_file" title="Abrir com aplicativo padrão do Windows (botão direito: Abrir com...)">📂 Abrir</button>
+              <button class="btn" id="btn-extract-one" data-i18n="btn_extract">⬇️ Baixar / Extrair</button>
+            </div>
+            <div class="row-2">
+              <button class="btn" id="btn-edit-meta-one" data-i18n="btn_edit_meta">✏️ Metadados</button>
+              <button class="btn danger-ghost" id="btn-delete-one" data-i18n="btn_delete">🗑️ Excluir</button>
+            </div>
+            <div id="inspector-post-actions" class="insp-post-actions">
+              <button type="button" class="btn sm hidden" id="btn-reveal-local" data-i18n="btn_open_local_dir" title="Abrir pasta local onde o arquivo foi baixado">📁 Pasta Local</button>
+              <button type="button" class="btn sm hidden" id="btn-reveal-origin" data-i18n="btn_open_origin_dir" title="Abrir pasta original do arquivo no seu PC">🗂️ Pasta de Origem</button>
+              <button type="button" class="btn sm hidden" id="btn-open-container" data-i18n="btn_open_container" title="Abrir o vídeo contêiner (pasta local .mp4 ou link no YouTube)">🎬 Abrir Contêiner</button>
+            </div>
+            <label class="check-row"><input type="checkbox" id="chk-apply-exif" checked> <span data-i18n="apply_exif">Aplicar data editada no EXIF/timestamp</span></label>
+          </div>
+
+          <div id="inspector-summary" class="inspector-summary"></div>
+
+          <div id="meta-tech" class="meta-tech"></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- MODAL: UPLOAD FILES / FOLDER -->
+  <div id="modal-upload" class="modal hidden">
+    <div class="modal-card upload-xl">
+      <div class="modal-head">
+        <h3>📤 Enviar Arquivos ou Pasta para Vídeo Óptico</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- BARRA SUPERIOR UNIFICADA: SELETOR DE ARQUIVOS (ESQ) + PASTA & ABAS (DIR) -->
+        <div class="set-group up-top-bar">
+          <div>
+            <div class="row-2" style="gap:8px">
+              <button type="button" class="file-btn compact" id="btn-native-pick-folder">📁 Escolher Pasta (Windows)</button>
+              <button type="button" class="file-btn compact" id="btn-native-pick-files">📄 Escolher Arquivos (Windows)</button>
+            </div>
+            <div class="row-inline" style="margin-top:7px">
+              <input type="text" id="up-local-path" placeholder="Ou cole um caminho do Windows (ex: C:\Fotos) · ou arraste arquivos na janela" style="flex:1">
+              <label class="btn sm" style="white-space:nowrap;cursor:pointer" title="Selecionar pelo navegador">🌐 Navegador<input type="file" id="up-files-input" multiple hidden></label>
+              <label class="btn sm" style="white-space:nowrap;cursor:pointer" title="Selecionar pasta pelo navegador">📂 Pasta<input type="file" id="up-folder-input" webkitdirectory directory multiple hidden></label>
+            </div>
+            <div id="up-source-info" class="hint-box hidden" style="margin-top:7px;margin-bottom:0"></div>
+            <div id="up-transfer-box" class="hint-box hidden" style="margin-top:7px;margin-bottom:0">
+              <div style="display:flex;justify-content:space-between">
+                <strong id="up-transfer-label">Carregando arquivos...</strong>
+                <span id="up-transfer-pct">0%</span>
+              </div>
+              <div class="job-bar">
+                <div class="job-bar-fill" id="up-transfer-bar" style="width:0%"></div>
+              </div>
+              <div class="muted sm-txt" id="up-transfer-eta" style="margin-bottom:0">Calculando tempo restante...</div>
+            </div>
+          </div>
+          <div class="up-top-right">
+            <div>
+              <label style="margin-top:0">Pasta Virtual de Destino no Cofre</label>
+              <select id="up-dest-folder"></select>
+            </div>
+            <div>
+              <label style="margin-top:6px">Tipo de Vídeo</label>
+              <div class="tabs sm up-mode-tabs">
+                <button type="button" class="tab active" data-up-tab="create">📦 Dados Brutos</button>
+                <button type="button" class="tab" data-up-tab="artistic">🎨 Vídeo Artístico</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 1: DADOS BRUTOS (2 COLUNAS EQUILIBRADAS) -->
+        <div id="up-tab-create">
+          <div class="up-grid-2">
+            <div class="up-col">
+              <div class="hint-box" style="margin-top:0">
+                <label style="margin-top:0;margin-bottom:6px">⚡ Predefinições Rápidas (1 clique — ajusta Resolução, Perfil, Codec e FPS ideais)</label>
+                <div id="up-presets" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+                  <button type="button" class="btn sm" data-up-preset="balanced" style="text-align:left;padding:8px 10px">
+                    <b>⭐ Equilibrado</b><br><span class="muted" style="font-size:10.5px">2K · 8 Tons · 15 FPS · AV1 (~3,5×)</span>
+                  </button>
+                  <button type="button" class="btn sm" data-up-preset="smallest" style="text-align:left;padding:8px 10px">
+                    <b>📦 Menor Arquivo</b><br><span class="muted" style="font-size:10.5px">720p · 4 Tons · 30 FPS · AV1 (~3,5×)</span>
+                  </button>
+                  <button type="button" class="btn sm" data-up-preset="safe" style="text-align:left;padding:8px 10px">
+                    <b>🛡️ Máx. Segurança</b><br><span class="muted" style="font-size:10.5px">2K · 6 Tons · 10 FPS · AV1 (0 B erro)</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="hint-box">
+                <div class="row-2">
+                  <div>
+                    <label>Resolução do Vídeo</label>
+                    <select id="up-resolution"></select>
+                  </div>
+                  <div>
+                    <label>Modulação Óptica (Dados)</label>
+                    <select id="up-profile"></select>
+                  </div>
+                </div>
+                <div class="row-2" style="margin-top:6px">
+                  <div>
+                    <label>FPS (filtrado automaticamente)</label>
+                    <select id="up-fps"></select>
+                  </div>
+                  <div>
+                    <label>Formato / Codec de Compressão</label>
+                    <select id="up-vcodec">
+                      <option value="auto">⭐ Automático — AV1 .mp4 (~3,5×, 0 B erro)</option>
+                      <option value="av1-mp4">🚀 AV1 (.mp4 av01 — -30% menor)</option>
+                      <option value="av1-mkv">🚀 AV1 (.mkv Matroska — -30% menor)</option>
+                      <option value="h264-mp4">📼 H.264 (.mp4 libx264 — Clássico)</option>
+                      <option value="vp9-webm">🌐 VP9 (.webm + Opus — Nativo YouTube)</option>
+                      <option value="hevc-mp4">🎞️ HEVC / H.265 (.mp4 hvc1)</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="up-prof-desc" class="muted sm-txt" style="margin-top:8px;margin-bottom:0"></div>
+              </div>
+            </div>
+
+            <div class="up-col">
+              <div id="up-attr-bars" class="attr-box" style="margin-top:0"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 2: VÍDEO ARTÍSTICO (2 COLUNAS: ESQ = VISUAL/ARTE/BASE · DIR = QUALIDADE/ÁUDIO/DURAÇÃO) -->
+        <div id="up-tab-carrier" class="hidden">
+          <div class="up-grid-2">
+            <!-- COLUNA ESQUERDA: PRÉVIA HD + 1. PADRÃO + 2. EFEITO + 3. VÍDEO BASE + ATRIBUTOS -->
+            <div class="up-col">
+              <!-- PREVIEW ANIMADO (GIF) EXPANSÍVEL EM HD -->
+              <div class="style-preview-card" style="margin-bottom:0">
+                <div class="style-preview-thumb-wrap" id="btn-expand-preview-img" title="Clique para expandir a prévia em HD">
+                  <img id="up-style-gif" src="/api/preview/gif?profile=art-fullres&amp;theme=deepdream-l2&amp;intensity=balanced&amp;hide_header=1&amp;use_host=0" alt="Preview animado do vídeo artístico">
+                  <span class="preview-zoom-pill">🔍 Expandir</span>
+                </div>
+                <div class="style-preview-meta">
+                  <div class="style-preview-title" id="up-style-gif-title">🌌 Relevo Nítido Full-Res — DeepDream Layer 2</div>
+                  <div class="style-preview-cap" id="up-style-gif-caption">Prévia animada real gerada pelo motor do BrightVault. Combine Padrão de Dados, Efeito Artístico e/ou Vídeo Base abaixo!</div>
+                  <div style="margin-top:5px">
+                    <button type="button" class="btn sm" id="btn-expand-preview">🔍 Expandir Prévia (Tela Grande)</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 1. PADRÃO DE DADOS (COMO OS BITS SÃO MODULADOS) -->
+              <div class="hint-box" style="margin:0">
+                <div style="font-weight:600;margin-bottom:5px">🧩 1. Padrão de Dados (Modulação Óptica)</div>
+                <select id="up-carrier-profile">
+                  <optgroup label="🕵️ Máscaras Furtivas (Zero Grade · Passam Despercebidas)">
+                    <option value="stealth-stars">✨ Máscara de Estrelas Tela Inteira (3b/estrela · 0% erro H.264/VP9 · até 221 MB/h 4K)</option>
+                    <option value="stealth-rain">🌧️ Filtro de Chuva Tela Inteira (2b/gota · Cega · até 258 MB/h 4K)</option>
+                    <option value="stealth-vhs">📼 Fita VHS Analógica (Linhas 32×8 · 0% erro H.264/VP9 · até 276 MB/h 4K)</option>
+                    <option value="stealth-film">🎬 Cinema de Rolo 35mm (Grão Orgânico · sensível a baixo bitrate YT — p/ 0% erro use Estrelas ou VHS)</option>
+                  </optgroup>
+                  <optgroup label="🎨 Padrões Artísticos &amp; Alta Densidade">
+                    <option value="art-fullres" selected>🌌 Relevo Nítido Full-Res 2-bit (±40/±14 s/ pixelar · p/ Efeitos &amp; Fractais · ~6,9×–10×)</option>
+                    <option value="video-fractal">🎨 Croma Suave ±16 (Decod. Cega · mantém Vídeo Base nítido + cor do Efeito)</option>
+                    <option value="art-fractal-angles">🧬 Gravura Linhas &amp; Ângulos — 4 Direções (Decod. Cega · Vídeo Base e/ou Efeito · ~12,9×)</option>
+                    <option value="art-stego">🪶 Relevo Suave ±12 / Manchester Cego (Arte ou Vídeo Base com cores originais)</option>
+                    <option value="art-crystal">💎 Cristal 3D — 4 Ângulos DCT1 (~6,9× AV1 · 3b/bloco)</option>
+                    <option value="art-fractal3d">☁️ Relevo 3D em Blocos 2-bit (~7,6× AV1 · 2× mais leve)</option>
+                    <option value="art-chroma">🌈 Cromático + 6 Tons (~5,0× AV1 · Mais Leve da família)</option>
+                    <option value="art-constel">✨ Constelação / Bokeh — Pontos (~9,2× H.264 · 0–3 B VP9)</option>
+                    <option value="art-bauhaus">🔷 Vitral Bauhaus — Triângulos (~10,1× H.264)</option>
+                    <option value="art-angles">📐 Linhas &amp; Ângulos — 4 Direções (~11× AV1 / 9,4× VP9)</option>
+                    <option value="art-truchet">🌀 Curvas de Truchet — Labirinto Contínuo (~18,3× H.264)</option>
+                    <option value="video-chroma">🌈 Colorização 4 Cores no Croma (Decod. Cega · mantém Vídeo Base nítido)</option>
+                    <option value="video-bw">🏁 Ruído P&amp;B Clássico (Estática sobre Vídeo Base ou P&amp;B puro)</option>
+                  </optgroup>
+                </select>
+                <div id="up-combo-hint" class="muted sm-txt" style="margin-top:5px;margin-bottom:0"></div>
+              </div>
+
+              <!-- 2. EFEITO ARTÍSTICO (OPCIONAL — PODE OU NÃO SER UTILIZADO) -->
+              <div id="up-art-theme-wrap" class="hint-box" style="margin:0">
+                <div style="font-weight:600;margin-bottom:5px">🎨 2. Efeito Artístico <span class="muted" style="font-weight:400">(opcional — escolha "Nenhum" se não quiser efeito)</span></div>
+                <div class="row-2">
+                  <div>
+                    <label style="margin-top:0">Efeito / Fractal</label>
+                    <select id="up-art-theme"></select>
+                  </div>
+                  <div id="up-art-keyword-wrap">
+                    <label style="margin-top:0">Palavra-chave livre (opcional)</label>
+                    <input type="text" id="up-art-keyword" placeholder="Ex: deepdream, mandelbrot, julia, sonho...">
+                  </div>
+                </div>
+              </div>
+
+              <!-- 3. VÍDEO BASE (OPCIONAL — PODE OU NÃO SER UTILIZADO) -->
+              <div id="up-host-video-wrap" class="hint-box" style="margin:0">
+                <div style="font-weight:600;margin-bottom:5px">🎬 3. Vídeo ou Imagem Base <span class="muted" style="font-weight:400">(opcional — .mp4, .mkv, .jpg, .png ou link do YouTube)</span></div>
+                <div class="row-inline">
+                  <input type="text" id="up-host-video" placeholder="Opcional: caminho .mp4/.mkv/.jpg/.png ou link do YouTube" style="flex:1">
+                  <button type="button" class="btn sm" id="btn-pick-host-video">📁 Escolher Mídia</button>
+                  <button type="button" class="btn sm" id="btn-clear-host-video" title="Limpar Vídeo Base">✕</button>
+                </div>
+                <div class="muted sm-txt" style="margin-top:4px;margin-bottom:0">
+                  <b>Decodificação 100% cega:</b> não precisa do vídeo original depois para extrair seus arquivos!
+                </div>
+              </div>
+
+              <div id="up-carrier-attr-bars" class="attr-box" style="margin-top:0"></div>
+              <div id="up-carrier-prof-desc" class="muted sm-txt" style="margin:0"></div>
+            </div>
+
+            <!-- COLUNA DIREITA: QUALIDADE/TELA CHEIA + ESTÚDIO DE ÁUDIO + DURAÇÃO/CAPACIDADE -->
+            <div class="up-col">
+              <!-- QUALIDADE, CODEC, INTENSIDADE & TELA CHEIA -->
+              <div class="hint-box" style="margin:0">
+                <div style="font-weight:600;margin-bottom:6px">⚙️ Qualidade, Compressão &amp; Tela Cheia</div>
+                <div class="row-2">
+                  <div>
+                    <label style="margin-top:0">Resolução do Vídeo</label>
+                    <select id="up-carrier-res"></select>
+                  </div>
+                  <div>
+                    <label style="margin-top:0">FPS</label>
+                    <select id="up-carrier-fps"></select>
+                  </div>
+                </div>
+                <div class="row-2" style="margin-top:6px">
+                  <div>
+                    <label>Formato / Codec de Compressão</label>
+                    <select id="up-carrier-vcodec">
+                      <option value="auto">⭐ Automático (AV1 p/ Cristal/Fractal/Ângulos · H.264 p/ Bordas/Vídeo)</option>
+                      <option value="h264-mp4">📼 H.264 (.mp4 libx264 — Melhor p/ Full-Res/Bauhaus/Constelação/Vídeo)</option>
+                      <option value="av1-mp4">🚀 AV1 (.mp4 av01 — Melhor p/ Cristal 3D/Relevo 3D/Ângulos)</option>
+                      <option value="av1-mkv">🚀 AV1 (.mkv Matroska)</option>
+                      <option value="vp9-webm">🌐 VP9 (.webm + Opus)</option>
+                      <option value="hevc-mp4">🎞️ HEVC / H.265 (.mp4 hvc1)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>🎚️ Densidade / Intensidade dos Dados</label>
+                    <select id="up-mask-intensity">
+                      <option value="subtle">🪶 Sutil (0,25× dados/frame — Blocos grandes · Mais limpo &amp; seguro)</option>
+                      <option value="balanced" selected>⭐ Equilibrada (1× dados/frame — Padrão Recomendado)</option>
+                      <option value="strong">🔥 Forte (2× dados/frame — 4 níveis · 2× GB, margem menor)</option>
+                      <option value="max">⚡ Máxima (4× dados/frame — Blocos 4×4 · 4× GB, uso avançado)</option>
+                    </select>
+                  </div>
+                </div>
+                <label class="check-row" id="up-hide-header-row" style="margin:8px 0 0;align-items:flex-start">
+                  <input type="checkbox" id="up-hide-header" checked style="margin-top:3px">
+                  <span><b>🙈 Remover barras e preencher tela inteira (100% sem bordas)</b><br><span class="muted" style="font-size:10.5px">Embute o cabeçalho invisivelmente na arte/cor e estende a textura até todas as bordas — zero barra superior ou inferior!</span></span>
+                </label>
+              </div>
+
+              <!-- ÁUDIO OPCIONAL (Sintetizada, Sem Áudio, Do Vídeo Base ou Arquivo/Link) -->
+              <div class="hint-box" style="margin:0">
+                <div class="row-2">
+                  <div>
+                    <label style="margin-top:0">🎵 Trilha de Áudio</label>
+                    <select id="up-audio-mode">
+                      <option value="ambient">🎹 Música Ambiente Generativa (Sintetizada)</option>
+                      <option value="none">🔇 Sem Áudio (Arquivo menor)</option>
+                      <option value="host" id="opt-audio-host">🎬 Áudio do Vídeo Base (se fornecido)</option>
+                      <option value="file">🎵 Arquivo de Áudio Local ou Link/URL</option>
+                    </select>
+                  </div>
+                  <div id="up-audio-file-wrap" class="hidden">
+                    <label style="margin-top:0">Arquivo ou Link de Áudio</label>
+                    <div class="row-inline">
+                      <input type="text" id="up-audio-source" placeholder="Caminho .mp3/.wav/.m4a ou URL" style="flex:1">
+                      <button type="button" class="btn sm" id="btn-pick-audio-file">📁</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- ESTÚDIO DE MÚSICA AMBIENTE GENERATIVA -->
+                <div id="up-music-studio" class="music-studio" style="margin-top:8px">
+                  <div class="row-2">
+                    <div>
+                      <label style="margin-top:0">🎼 Estilo / Tipo de Música</label>
+                      <select id="up-music-style">
+                        <option value="lofi">☕ Lo-Fi Chillhop (Rhodes quente, vinil, batida suave)</option>
+                        <option value="ambient" selected>🌌 Espacial / Dreamy Ambient (Pads profundos &amp; sinos)</option>
+                        <option value="synthwave">🌆 Synthwave / Retrô 80s (Baixo pulsante &amp; arpejo)</option>
+                        <option value="meditation">🧘 Meditação / Zen (Tigelas tibetanas &amp; drone)</option>
+                        <option value="nature">🌊 Praia &amp; Floresta (Ondas do mar + harpa/violão)</option>
+                        <option value="piano">🎹 Piano Cinematográfico (Dedilhado &amp; cordas)</option>
+                        <option value="chiptune">🕹️ Chiptune / Retrô 8-bit (Videogame nostálgico)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style="margin-top:0">🎭 Tema / Clima Musical</label>
+                      <select id="up-music-mood">
+                        <option value="dreamy" selected>☁️ Sonhador / Etéreo (Lídio Maj9)</option>
+                        <option value="calm">🌿 Calmo / Relaxante (Pentatônica Quente)</option>
+                        <option value="melancholic">🌧️ Melancólico / Nostálgico (Menor 9ª)</option>
+                        <option value="energetic">⚡ Energético / Épico (Dórico Pulsante)</option>
+                        <option value="mysterious">🔮 Misterioso / Espacial (Frígio Sus2)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style="margin-top:6px">
+                    <label style="margin-bottom:4px">🎻 Instrumentos Individuais (ligue/desligue à vontade)</label>
+                    <div id="up-music-insts" class="music-inst-pills">
+                      <label class="inst-pill"><input type="checkbox" value="pad" checked> 🎹 Pad</label>
+                      <label class="inst-pill"><input type="checkbox" value="strings" checked> 🎻 Cordas</label>
+                      <label class="inst-pill"><input type="checkbox" value="piano"> 🎹 Piano</label>
+                      <label class="inst-pill"><input type="checkbox" value="rhodes"> 🎼 Rhodes</label>
+                      <label class="inst-pill"><input type="checkbox" value="guitar"> 🎸 Violão</label>
+                      <label class="inst-pill"><input type="checkbox" value="harp"> 🪕 Harpa</label>
+                      <label class="inst-pill"><input type="checkbox" value="bells" checked> 🔔 Sinos</label>
+                      <label class="inst-pill"><input type="checkbox" value="bowls"> 🥣 Tigelas Zen</label>
+                      <label class="inst-pill"><input type="checkbox" value="bass"> 🎸 Baixo</label>
+                      <label class="inst-pill"><input type="checkbox" value="drums"> 🥁 Bateria</label>
+                      <label class="inst-pill"><input type="checkbox" value="solo"> 🎷 Solo Melódico</label>
+                      <label class="inst-pill"><input type="checkbox" value="rain" checked> 🌧️ Chuva</label>
+                      <label class="inst-pill"><input type="checkbox" value="ocean"> 🌊 Mar</label>
+                      <label class="inst-pill"><input type="checkbox" value="vinyl"> 💿 Vinil</label>
+                    </div>
+                  </div>
+                  <div style="margin-top:6px">
+                    <label>✍️ Texto / Semente Criativa (muda solos, picos de ritmo e acordes)</label>
+                    <input type="text" id="up-music-prompt" placeholder="Ex: chuva em tokyo 1998, viagem noturna, café de domingo... (opcional)">
+                  </div>
+                  <div class="row-inline" style="margin-top:7px;align-items:center">
+                    <button type="button" class="btn sm primary" id="btn-preview-music">▶️ Ouvir Prévia (16s)</button>
+                    <button type="button" class="btn sm" id="btn-reroll-music" title="Sortear nova variação de ritmo, calma e solos">🎲 Nova Melodia</button>
+                    <audio id="up-music-player" controls preload="none" class="music-audio-player hidden"></audio>
+                  </div>
+                </div>
+              </div>
+
+              <!-- DURAÇÃO MANDATÓRIA + MEDIDOR DE CAPACIDADE EM GB & PREENCHIMENTO -->
+              <div class="hint-box" style="margin:0">
+                <div class="row-inline" style="justify-content:space-between;align-items:flex-end">
+                  <div style="flex:1">
+                    <label style="margin-top:0">⏱️ Duração Mandatória do Vídeo Gerado</label>
+                    <select id="up-duration-source">
+                      <option value="files">📦 Arquivos Enviados (duração exata p/ caber os arquivos)</option>
+                      <option value="video" id="opt-dur-video">🎬 Vídeo Base (música em loop se menor, ou cortada se maior)</option>
+                      <option value="audio">🎵 Música / Áudio (vídeo em loop se menor, ou cortado se maior)</option>
+                    </select>
+                  </div>
+                  <button type="button" class="btn sm hidden" id="btn-reprobe-cap" title="Recalcular duração e capacidade">🔄 Calcular</button>
+                </div>
+                <div id="up-padding-mode-wrap" style="margin-top:7px">
+                  <label>🎞️ Quando o arquivo for menor que a duração do vídeo</label>
+                  <select id="up-padding-mode">
+                    <option value="auto" selected>✨ Suavizar Bits Automaticamente + Manter Textura Contínua (sem corte brusco!)</option>
+                    <option value="spread">🔀 Espalhar Dados pelo Vídeo Todo (pedaços com/sem + salto automático rápido)</option>
+                    <option value="start">📦 Concentrar no Início (restante do vídeo 100% liso sem granulação)</option>
+                  </select>
+                </div>
+                <div id="up-capacity-box" class="cap-box hidden">
+                  <div class="cap-head">
+                    <strong id="up-cap-header">📊 Capacidade do Vídeo</strong>
+                    <span id="up-cap-pct" style="font-weight:700;color:var(--primary)">0%</span>
+                  </div>
+                  <div class="cap-track">
+                    <div class="cap-fill" id="up-cap-bar" style="width:0%;background:#22c55e"></div>
+                  </div>
+                  <div id="up-cap-detail" class="muted sm-txt" style="margin-bottom:0"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RODAPÉ COMPARTILHADO COMPACTO: MODO PÚBLICO + ENVIO YOUTUBE -->
+        <div class="up-footer-strip">
+          <div class="up-foot-card">
+            <label class="check-row" style="margin:0">
+              <input type="checkbox" id="up-public-mode">
+              <span><b>🌐 Compartilhamento Público</b> <span class="muted">(qualquer pessoa com link + senha baixa sem cofre)</span></span>
+            </label>
+            <div id="up-public-pw-wrap" class="hidden" style="margin-top:8px">
+              <div id="up-public-pw-list" style="display:flex;flex-direction:column;gap:6px">
+                <div class="row-inline"><input type="password" class="pub-pw-input" placeholder="Senha 1 — Cascata Pós-Quântica (1 a 5 senhas)" style="flex:1"></div>
+              </div>
+              <div class="row-inline" style="margin-top:6px">
+                <button type="button" class="btn sm" id="btn-up-add-pub-pw">➕ Senha Extra</button>
+                <button type="button" class="btn sm" id="btn-up-toggle-pub-pw">👁️ Mostrar</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="up-foot-card" style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+            <label class="check-row" style="margin:0">
+              <input type="checkbox" id="up-auto-yt">
+              <span><b>☁️ Enviar automaticamente para o YouTube</b> <span class="muted">(ou salva local p/ envio manual)</span></span>
+            </label>
+            <div class="row-inline" style="align-items:center">
+              <span class="muted" style="font-size:11.5px;white-space:nowrap">📝 Nome no YT:</span>
+              <input type="text" id="up-video-title" placeholder="Opcional (padrão: BV-xxxxxxxx)" style="flex:1;padding:5px 8px;font-size:12px">
+            </div>
+            <div class="row-inline" style="align-items:center">
+              <span class="muted" style="font-size:11.5px;white-space:nowrap">👁️ Privacidade:</span>
+              <select id="up-privacy" style="padding:5px 8px;font-size:12px">
+                <option value="">Padrão das configurações</option>
+                <option value="public">🌍 Público (visível para todos no YouTube)</option>
+                <option value="unlisted">🔗 Não Listado (oculto · baixa sem cookies)</option>
+                <option value="private">🔒 Privado (apenas sua conta)</option>
+              </select>
+            </div>
+            <div class="row-inline" style="align-items:center">
+              <span class="muted" style="font-size:11.5px;white-space:nowrap">🛡️ Blindagem YT:</span>
+              <select id="up-cross-fec" style="padding:5px 8px;font-size:12px" title="Paridade Cross-Frame RS entre partições (reconstrói frames perdidos se o YouTube derrubar o bitrate)">
+                <option value="auto" selected>⚡ Automática (ativa nos modos Stealth/Arte ≥24 frames)</option>
+                <option value="max">🛡️ Máxima (K=6, M=2 · +33% · aguenta 25% do vídeo destruído)</option>
+                <option value="high">🛡️ Alta (K=8, M=2 · +25% · aguenta 20% ou 2 apagões de 10%)</option>
+                <option value="off">📦 Desligada (menor duração/tamanho possível)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancelar</button>
+        <button class="btn primary" id="btn-start-upload">🚀 Criptografar e Gerar Vídeo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PUBLIC DOWNLOAD (LINK + 1..5 LAYERED PASSWORDS OR FOLDER SHARE CODE, NO VAULT REQUIRED!) -->
+  <div id="modal-public-download" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>🌐 Download Público (Vídeo com Senha ou Código de Pasta · Sem Cofre)</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="tabs sm" style="margin-bottom:10px">
+          <button type="button" class="tab active" data-pub-tab="video">🎬 Vídeo Público (Link + Senha)</button>
+          <button type="button" class="tab" data-pub-tab="folder">📁 Código de Pasta (BVFOLDER1)</button>
+        </div>
+
+        <div id="pub-tab-video">
+          <p class="muted sm-txt">Baixe ou inspecione qualquer vídeo criado em <b>Modo Público</b> usando apenas o link do YouTube (ou arquivo local) e a(s) senha(s) — sem precisar criar ou desbloquear nenhum cofre.</p>
+
+          <label>Link do YouTube ou Caminho do Vídeo Local (.mp4 / .mkv / .webm)</label>
+          <div class="row-inline">
+            <input type="text" id="pub-dl-source" placeholder="https://www.youtube.com/watch?v=... ou C:\...\video.mp4" style="flex:1">
+            <button type="button" class="btn sm" id="btn-pub-pick-video">📁 Escolher Vídeo</button>
+          </div>
+
+          <div style="margin-top:10px">
+            <label>🔑 Senha(s) do Vídeo Público (adicione mais se foi criptografado em Cascata Pós-IA)</label>
+            <div id="pub-dl-pw-list" style="display:flex;flex-direction:column;gap:6px">
+              <div class="row-inline"><input type="password" class="pub-dl-pw-input" placeholder="Senha 1 (obrigatória)" style="flex:1"></div>
+            </div>
+            <div class="row-inline" style="margin-top:6px">
+              <button type="button" class="btn sm" id="btn-pub-add-pw">➕ Adicionar Senha Extra</button>
+              <button type="button" class="btn sm" id="btn-pub-toggle-pw">👁️ Mostrar/Ocultar</button>
+            </div>
+          </div>
+
+          <div style="margin-top:10px">
+            <label>📁 Pasta de Destino (vazio = Downloads\BrightVault-Publico)</label>
+            <div class="row-inline">
+              <input type="text" id="pub-dl-dest" placeholder="Opcional: pasta onde salvar os arquivos extraídos" style="flex:1">
+              <button type="button" class="btn sm" id="btn-pub-pick-dest">📁 Pasta</button>
+            </div>
+          </div>
+
+          <div class="row-2" style="margin-top:12px">
+            <button type="button" class="btn" id="btn-pub-peek">🔍 Inspecionar Arquivos Primeiro</button>
+            <button type="button" class="btn primary" id="btn-pub-extract">⬇️ Baixar &amp; Descriptografar Tudo</button>
+          </div>
+        </div>
+
+        <div id="pub-tab-folder" class="hidden">
+          <p class="muted sm-txt">Cole um <b>Código de Pasta</b> (<code>BVFOLDER1:...</code> ou legado <code>YTFOLDER1:...</code>) compartilhado por alguém. Ele já contém os links dos vídeos no YouTube e as chaves exclusivas dos arquivos daquela pasta naquele momento — sem precisar de cofre nem senha extra.</p>
+
+          <label>🔑 Código de Compartilhamento da Pasta (<code>BVFOLDER1:...</code>)</label>
+          <textarea id="pub-folder-code" rows="4" placeholder="Cole aqui o código começando com BVFOLDER1:..."></textarea>
+
+          <div style="margin-top:8px">
+            <label>📁 Pasta de Destino (vazio = Downloads\BrightVault-Compartilhado\NomeDaPasta)</label>
+            <div class="row-inline">
+              <input type="text" id="pub-folder-dest" placeholder="Opcional: pasta onde salvar os arquivos da pasta compartilhada" style="flex:1">
+              <button type="button" class="btn sm" id="btn-pub-folder-pick-dest">📁 Pasta</button>
+            </div>
+          </div>
+
+          <div class="row-2" style="margin-top:12px">
+            <button type="button" class="btn" id="btn-pub-folder-inspect">🔍 Ver Arquivos do Código</button>
+            <button type="button" class="btn primary" id="btn-pub-folder-extract">⬇️ Baixar Pasta Completa</button>
+          </div>
+        </div>
+
+        <div id="pub-progress-box" class="hint-box hidden" style="margin-top:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <strong id="pub-prog-title">Processando...</strong>
+            <span id="pub-prog-pct" style="font-weight:700;color:var(--primary)">0%</span>
+          </div>
+          <div class="job-bar" style="margin:6px 0"><div class="job-bar-fill" id="pub-prog-bar" style="width:0%"></div></div>
+          <div class="muted sm-txt" id="pub-prog-detail" style="margin-bottom:0"></div>
+        </div>
+
+        <div id="pub-error" class="alert error hidden" style="margin-top:10px"></div>
+        <div id="pub-result" class="hidden" style="margin-top:10px"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PEEK VIDEO (MANIFEST-FIRST) -->
+  <div id="modal-peek" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>🔍 Inspecionar Conteúdo do Vídeo Antes de Baixar</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted sm-txt">Lê apenas os primeiros segundos do vídeo (<i>Manifest-First</i>) para revelar todos os
+          arquivos e pré-visualizações antes de baixar o vídeo inteiro.</p>
+        <div class="row-inline">
+          <input type="text" id="peek-source" placeholder="Cole a URL do YouTube ou caminho de vídeo .mp4 local">
+          <button class="btn primary" id="btn-run-peek">Inspecionar</button>
+        </div>
+        <div id="peek-progress-box" class="hint-box hidden" style="margin-top:10px">
+          <div style="display:flex;justify-content:space-between;gap:8px">
+            <strong id="peek-prog-detail">Iniciando inspeção...</strong>
+            <span id="peek-prog-pct">0%</span>
+          </div>
+          <div class="job-bar"><div class="job-bar-fill" id="peek-prog-bar" style="width:0%"></div></div>
+          <div class="muted sm-txt" id="peek-prog-eta" style="margin-bottom:0">Calculando...</div>
+        </div>
+        <div id="peek-result" class="peek-result"></div>
+        <div id="peek-extract-bar" class="hint-box hidden" style="margin-top:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+            <div>
+              <button class="btn sm" id="btn-peek-select-all">☑️ Selecionar Todos</button>
+              <span id="peek-sel-count" class="muted sm-txt" style="margin-left:6px">Todos os arquivos</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <label class="check-row" style="margin:0"><input type="checkbox" id="peek-skip-unchanged" checked> Pular iguais no PC</label>
+              <button class="btn primary sm" id="btn-peek-download">⬇️ Baixar &amp; Descompilar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: SINCRONIZACAO INCREMENTAL (VIDEOS DE ATUALIZACAO / DELTA) -->
+  <div id="modal-sync" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head"><h3>🔄 Sincronização Incremental por Pasta (Vídeos de Atualização)</h3><button class="btn-mini" data-close>✕</button></div>
+      <div class="modal-body">
+        <p class="muted sm-txt">Identifica cada pasta por um código único (<code>SYNC-...</code>), compara por data/tamanho/SHA-256 e envia <b>apenas os arquivos novos ou alterados</b> em um vídeo Delta (limite de até <b>10 atualizações</b> por cadeia, com cada arquivo completo e independente para evitar corrupção em série).</p>
+
+        <div id="sync-existing-wrap" class="hidden" style="margin-bottom:10px">
+          <label>Pastas já sincronizadas (clique para carregar)</label>
+          <div id="sync-groups-list" class="pill-wrap"></div>
+        </div>
+
+        <div class="row-inline">
+          <input type="text" id="sync-local-path" placeholder="Selecione ou cole o caminho da pasta local no Windows">
+          <button class="btn" id="btn-sync-pick">📁 Escolher Pasta</button>
+          <button class="btn primary" id="btn-sync-analyze">🔍 Analisar</button>
+        </div>
+
+        <div class="row-2" style="margin-top:8px">
+          <div>
+            <label>Pasta Virtual no BrightVault</label>
+            <select id="sync-dest-folder"></select>
+          </div>
+          <div>
+            <label>Resolução / Perfil</label>
+            <div class="row-2">
+              <select id="sync-res"></select>
+              <select id="sync-prof"></select>
+            </div>
+          </div>
+        </div>
+
+        <div id="sync-diff-box" class="hint-box hidden" style="margin-top:12px"></div>
+
+        <div id="sync-actions-box" class="hidden" style="margin-top:10px">
+          <label class="check-row"><input type="checkbox" id="sync-auto-yt" checked> Enviar automaticamente para o YouTube (API v3)</label>
+          <label class="check-row"><input type="checkbox" id="sync-apply-deletes" checked> Registrar arquivos removidos localmente no catálogo/manifesto</label>
+          <label class="check-row"><input type="checkbox" id="sync-consolidate"> <b>Consolidar Novo Backup Base:</b> gera um vídeo Base completo novo e zera o contador de atualizações (0/10)</label>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+            <button class="btn" data-close>Cancelar</button>
+            <button class="btn primary" id="btn-sync-run">🚀 Executar Sincronização Incremental</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: LINK YOUTUBE URL (MANUAL ASSISTED) -->
+  <div id="modal-link-yt" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>🔗 Vincular Vídeo Publicado no YouTube</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="link-cont-id">
+        <div id="link-cont-info" class="hint-box"></div>
+        <label>URL ou ID do Vídeo no YouTube</label>
+        <input type="text" id="link-yt-url" placeholder="https://www.youtube.com/watch?v=...">
+        <label class="check-row"><input type="checkbox" id="link-verify" checked> Verificar disponibilidade online (via
+          yt-dlp)</label>
+        <label class="check-row"><input type="checkbox" id="link-delete-local" checked> Deletar vídeo temporário local
+          após vincular</label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="btn-link-open-folder">📂 Abrir Pasta do Vídeo</button>
+        <button class="btn primary" id="btn-save-link-yt">Salvar Vínculo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: METADATA EDIT (SINGLE FILE OR BATCH) -->
+  <div id="modal-batch" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="modal-batch-title">✏️ Editar Metadados</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="modal-batch-desc" class="muted sm-txt">Deixe em branco os campos que não deseja alterar. Ideal para organizar pastas de fotos antigas!</p>
+        <div id="batch-single-name-wrap" class="hidden">
+          <label>Nome de Exibição</label>
+          <input type="text" id="batch-name" placeholder="Nome exibido no catálogo">
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Data Efetiva (Foto/Evento)</label>
+            <input type="text" id="batch-date" placeholder="Ex: 1998-07-01 ou 1995">
+          </div>
+          <div>
+            <label>Precisão</label>
+            <select id="batch-precision">
+              <option value="">(Manter atual)</option>
+              <option value="exact">Exata</option>
+              <option value="month">Mês</option>
+              <option value="year">Ano</option>
+              <option value="decade">Década</option>
+              <option value="unknown">Desconhecida</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-2">
+          <div id="batch-shift-wrap">
+            <label>Ou Deslocar Datas (dias, ex: -365 ou +7)</label>
+            <input type="number" id="batch-shift-days" placeholder="0">
+          </div>
+          <div>
+            <label>Local / Evento</label>
+            <input type="text" id="batch-location" placeholder="Ex: Viagem Sul 1998">
+          </div>
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Pasta Virtual</label>
+            <select id="batch-folder"></select>
+          </div>
+          <div id="batch-col-single-select-wrap">
+            <label>Adicionar à Coleção</label>
+            <select id="batch-collection"></select>
+          </div>
+        </div>
+        <label id="batch-tags-label">Tags (separadas por vírgula)</label>
+        <input type="text" id="batch-tags" placeholder="antigas, álbum 1998">
+        <div id="batch-single-extra-wrap" class="hidden">
+          <label>Coleções</label>
+          <div id="batch-collections-checks" class="check-list"></div>
+          <label>Notas</label>
+          <textarea id="batch-notes" rows="2" placeholder="Observações sobre o arquivo..."></textarea>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancelar</button>
+        <button class="btn primary" id="btn-apply-batch">💾 Salvar Metadados</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PROFILE BACKUP & RESTORE -->
+  <div id="modal-catalog" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>☁️ Backup do Perfil no YouTube</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted sm-txt">O <b>Backup do Perfil</b> salva toda a sua organização (árvore de pastas, coleções, datas corrigidas de fotos, miniaturas e links dos vídeos) em um vídeo criptografado no YouTube — permitindo restaurar tudo em qualquer computador novo só com sua senha mestra!</p>
+        <div id="catalog-info" class="hint-box"></div>
+        <label>Confirme sua Senha Mestra para criptografar o Backup do Perfil</label>
+        <input type="password" id="cat-password" placeholder="Sua senha mestra">
+        <label class="check-row"><input type="checkbox" id="cat-thumbs" checked> Incluir miniaturas/previews no backup do perfil</label>
+        <label class="check-row"><input type="checkbox" id="cat-upload-yt" checked> Enviar automaticamente para o YouTube (via API v3)</label>
+        <label class="check-row"><input type="checkbox" id="cat-delete-old" checked> <b>Substituição Segura:</b> apagar o Backup do Perfil antigo somente após confirmar que o novo subiu</label>
+        <div class="row-2" style="margin-top:12px">
+          <button class="btn primary" id="btn-run-cat-backup">🎬 Atualizar Backup do Perfil</button>
+          <button class="btn" id="btn-export-ytcat">💾 Baixar Cópia Local (.ytcat)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: SETTINGS & CALIBRATION -->
+  <div id="modal-settings" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3 data-i18n="settings_title">⚙️ Configurações, Aparência, Idioma &amp; YouTube API</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="tabs sm">
+          <button class="tab active" data-set-tab="general" data-i18n="set_tab_general">Geral &amp; Aparência</button>
+          <button class="tab" data-set-tab="youtube" data-i18n="set_tab_youtube">YouTube API (OAuth)</button>
+          <button class="tab" data-set-tab="calibrate" data-i18n="set_tab_calibrate">Calibração Óptica</button>
+          <button class="tab" data-set-tab="security" data-i18n="set_tab_security">Segurança / Senha</button>
+        </div>
+
+        <div id="set-tab-general">
+          <!-- GRUPO 0: APARÊNCIA (6 TEMAS) & IDIOMA (9 IDIOMAS) -->
+          <div class="set-group">
+            <div class="set-group-title" data-i18n="appearance_title">🎨 Aparência &amp; Idioma</div>
+            <div class="row-2">
+              <div>
+                <label data-i18n="label_theme">Tema de Cores</label>
+                <select id="set-theme">
+                  <option value="bright-night" data-i18n="theme_bright_night">✨ Noite Brilhante (Padrão)</option>
+                  <option value="night" data-i18n="theme_night">🌙 Noite (Azul Escuro)</option>
+                  <option value="paper" data-i18n="theme_paper">📄 Papel Amarelado &amp; Preto</option>
+                  <option value="desert" data-i18n="theme_desert">🏜️ Deserto (Âmbar Escuro)</option>
+                  <option value="light" data-i18n="theme_light">☀️ Light (Branco)</option>
+                  <option value="rainbow" data-i18n="theme_rainbow">🌈 Rainbow (Arco-Íris Pastel)</option>
+                  <option value="twilight" data-i18n="theme_twilight">🌆 Crepúsculo (Violeta &amp; Pôr-do-Sol)</option>
+                </select>
+              </div>
+              <div>
+                <label data-i18n="label_language">Idioma da Interface</label>
+                <select id="set-language">
+                  <option value="pt">🇧🇷 Português</option>
+                  <option value="en">🇺🇸 English</option>
+                  <option value="es">🇪🇸 Español</option>
+                  <option value="ru">🇷🇺 Русский</option>
+                  <option value="fr">🇫🇷 Français</option>
+                  <option value="it">🇮🇹 Italiano</option>
+                  <option value="ja">🇯🇵 日本語</option>
+                  <option value="ar">🇸🇦 العربية</option>
+                  <option value="zh">🇨🇳 中文</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- SOBRE: INTUITO CIENTÍFICO & WHITE-HAT -->
+          <div class="set-group" style="border-color:rgba(56,189,248,.35)">
+            <div class="set-group-title">🔬 Intuito Científico &amp; Pesquisa White-Hat (BrightVault v0.701)</div>
+            <p class="muted sm-txt" style="line-height:1.5;margin-bottom:6px">
+              O <b>BrightVault</b> (junto ao navegador <b>BrightWeb</b>) é um projeto aberto de pesquisa científica e engenharia experimental voltado ao estudo da resistência, preservação e recuperação de dados binários através de canais ruidosos com compressão severa com perdas — como codecs de vídeo modernos (H.264, VP9 e AV1) sob transcodificação, redução de bitrate variável (VBR) e subamostragem cromática (<code>YUV420p</code>). A pesquisa explora teoria da informação aplicada, códigos corretores de erros Reed-Solomon intra-frame e inter-frame (<i>Cross-Frame RS</i>), esteganografia óptica resiliente e compressão híbrida por camadas.
+            </p>
+            <p class="muted sm-txt" style="line-height:1.5;margin-bottom:0">
+              Todo o ecossistema segue princípios estritos de segurança <b>White-Hat</b>, com código aberto, transparência total e foco educacional e defensivo: toda a criptografia (<i>Argon2id + HKDF-SHA512 + AES-256-GCM + XChaCha20-Poly1305</i>) ocorre exclusivamente no computador do usuário, sem servidores centrais ou telemetria oculta. O objetivo é avançar o conhecimento aberto sobre resiliência de dados e segurança defensiva, sempre incentivando o uso ético e o respeito aos Termos de Serviço das plataformas.
+            </p>
+          </div>
+
+          <!-- GRUPO 1: CODIFICAÇÃO -->
+          <div class="set-group">
+            <div class="set-group-title">🎞️ Codificação</div>
+            <div class="row-2">
+              <div><label>Resolução Padrão</label><select id="set-res"></select></div>
+              <div>
+                <label>Privacidade Padrão no YouTube</label>
+                <select id="set-privacy">
+                  <option value="unlisted">🔗 Não Listado (Recomendado — oculto e baixa sem cookies)</option>
+                  <option value="public">🌍 Público (visível para todos no YouTube — baixa sem cookies)</option>
+                  <option value="private">🔒 Privado (exige cookies do navegador p/ baixar)</option>
+                </select>
+              </div>
+            </div>
+            <div class="row-2" style="margin-top:6px">
+              <div>
+                <label>Perfil de Modulação Padrão</label>
+                <select id="set-prof"></select>
+              </div>
+              <div>
+                <label>Formato / Codec Padrão</label>
+                <select id="set-vcodec">
+                  <option value="auto">⭐ Automático (AV1 .mp4 p/ Dados · H.264 p/ Arte)</option>
+                  <option value="av1-mp4">🚀 AV1 (.mp4 av01 — -30% menor)</option>
+                  <option value="av1-mkv">🚀 AV1 (.mkv Matroska)</option>
+                  <option value="h264-mp4">📼 H.264 (.mp4 libx264 — Clássico)</option>
+                  <option value="vp9-webm">🌐 VP9 (.webm + Opus)</option>
+                  <option value="hevc-mp4">🎞️ HEVC / H.265 (.mp4 hvc1)</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <div id="set-attr-bars" class="attr-box"></div>
+              <div id="set-prof-desc" class="hint-box" style="margin-top:6px;font-size:11.5px"></div>
+            </div>
+            <label class="check-row" style="align-items:flex-start;margin-top:8px">
+              <input type="checkbox" id="set-opt-png" style="margin-top:3px">
+              <span><b>🖼️ Otimizar imagens PNG sem perda visual (WebP Lossless):</b> reduz PNGs em 38% a 97% mantendo 100% dos pixels idênticos (converte de volta para PNG ao baixar). <i>Desmarque apenas se precisar do hash SHA-256 original do arquivo PNG. (Compressão Sólida zstd Best + Delta-PCM16 em WAV já ficam sempre ativos e são 100% bit-exatos.)</i></span>
+            </label>
+          </div>
+
+          <!-- GRUPO 2: DESEMPENHO (MOVIDO PARA A ABA FLUTUANTE NA TELA PRINCIPAL) -->
+          <div class="set-group" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div>
+              <div class="set-group-title" style="margin-bottom:3px;border:none;padding:0">⚡ Uso de CPU, RAM e Desempenho</div>
+              <div class="muted" style="font-size:11.5px">Agora configurado com presets rápidos e sliders em % na aba flutuante <b>⚡ Desempenho</b> no topo da tela principal.</div>
+            </div>
+            <button type="button" class="btn sm primary" id="btn-settings-open-perf" style="white-space:nowrap">⚡ Abrir Desempenho</button>
+          </div>
+
+          <!-- GRUPO 3: LIMPEZA E BACKUPS -->
+          <div class="set-group">
+            <div class="set-group-title">🧹 Limpeza e Backups</div>
+            <label>Política de Limpeza do Vídeo Temporário Local</label>
+            <select id="set-cleanup">
+              <option value="safe_after_verify">Seguro: deletar vídeo local após verificar online</option>
+              <option value="immediate_after_upload">Econômico: deletar vídeo local logo após o upload</option>
+              <option value="keep">Manter vídeo local na pasta staging</option>
+            </select>
+            <div style="margin-top:8px">
+              <label>Limite de Vídeos de Atualização por Pasta (0 a 99 — 0 = apenas vídeos inteiros)</label>
+              <div class="row-inline">
+                <input type="number" id="set-max-deltas" min="0" max="99" value="10" style="max-width:120px">
+                <button type="button" class="btn sm" id="btn-reset-deltas-rec">⭐ Configuração Recomendada (10)</button>
+              </div>
+            </div>
+            <label class="check-row" style="align-items:flex-start;margin-top:10px">
+              <input type="checkbox" id="set-keep-prev" style="margin-top:3px">
+              <span><b>Guardar 1 cópia de reserva do Backup do Perfil anterior:</b> mantém os 2 últimos vídeos do seu Perfil no YouTube (atual + anterior) em vez de apagar o anterior imediatamente, servindo como segurança extra caso precise voltar atrás.</span>
+            </label>
+          </div>
+
+          <button class="btn primary full" id="btn-save-settings" style="margin-top:8px">💾 Salvar Configurações e Aplicar Limites</button>
+        </div>
+
+        <div id="set-tab-youtube" class="hidden">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+            <p class="muted sm-txt" style="margin:0">Conecte credenciais OAuth (App para computador) do Google Cloud
+              para enviar vídeos e fazer rotação do Vídeo-Índice com 1 clique.</p>
+            <button class="btn primary sm" id="btn-open-oauth-tutorial">📖 Tutorial Passo a Passo</button>
+          </div>
+          <div id="yt-conn-status" class="hint-box"></div>
+          <label>Google OAuth Client ID</label>
+          <input type="text" id="set-yt-cid" placeholder="xxxx.apps.googleusercontent.com">
+          <label>Google OAuth Client Secret</label>
+          <input type="password" id="set-yt-csec" placeholder="GOCSPX-...">
+          <div class="row-2" style="margin-top:10px">
+            <button class="btn" id="btn-save-yt-creds">💾 Salvar Credenciais</button>
+            <button class="btn primary" id="btn-connect-yt">🔗 Conectar Conta YouTube</button>
+          </div>
+          <button class="btn full" id="btn-reconnect-yt" style="margin-top:7px" title="Limpa o token expirado e abre nova autorização no Google">🔄 Reconectar YouTube (Renovar Sessão Expirada)</button>
+          <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:10px">
+            <h4 style="font-size:12.5px;color:var(--primary);margin-bottom:6px">🍪 Download de Vídeos Privados (yt-dlp)</h4>
+            <p class="muted sm-txt">Vídeos <b>Não Listados</b> já ficam ocultos do público, 100% criptografados com AES-256-GCM e baixam sem precisar de cookies. Se quiser baixar vídeos <b>Privados</b>, escolha o navegador onde está logado no YouTube:</p>
+            <div class="row-2">
+              <div>
+                <label>Cookies do Navegador</label>
+                <select id="set-yt-cookies-browser">
+                  <option value="">Nenhum (use vídeos Não Listados — Recomendado)</option>
+                  <option value="edge">Microsoft Edge</option>
+                  <option value="chrome">Google Chrome</option>
+                  <option value="firefox">Mozilla Firefox</option>
+                  <option value="brave">Brave</option>
+                  <option value="opera">Opera</option>
+                </select>
+              </div>
+              <div>
+                <label>Ou caminho de arquivo cookies.txt (opcional)</label>
+                <input type="text" id="set-yt-cookies-file" placeholder="Ex: C:\...\cookies.txt">
+              </div>
+            </div>
+            <div id="yt-js-status" class="muted sm-txt" style="margin-top:6px"></div>
+          </div>
+        </div>
+
+        <div id="set-tab-calibrate" class="hidden">
+          <div class="hint-box">
+            <b>🧪 O que é a Calibração Óptica?</b><br>
+            É um <b>teste local opcional</b> (~5 segundos) que gera um pequeno vídeo de teste, aplica uma compressão forte igual à do YouTube e decodifica de volta para verificar se o seu PC está recuperando 100% dos bits sem erros. <i>Você não precisa usar isso no dia a dia — serve apenas como diagnóstico.</i>
+          </div>
+          <div class="row-2">
+            <div>
+              <label>Resolução de Teste</label>
+              <select id="cal-res">
+                <option value="1080p" selected>1080p (Rápido ~5s)</option>
+                <option value="4k">4K UHD (Recomendado)</option>
+              </select>
+            </div>
+            <div>
+              <label>Agressividade da Compressão (CRF)</label>
+              <input type="number" id="cal-crf" value="26" min="16" max="34">
+            </div>
+          </div>
+          <button class="btn primary" id="btn-run-calibrate" style="margin-top:10px">🧪 Rodar Teste de
+            Calibração</button>
+          <div id="cal-results" class="cal-results"></div>
+        </div>
+
+        <div id="set-tab-security" class="hidden">
+          <div class="hint-box" id="sec-pq-status" style="margin-bottom:10px">
+            🛡️ <b>Criptografia Pós-Quântica em Cascata ativa:</b> <code>Argon2id</code> + <code>HKDF-SHA512</code> + dupla camada <b>AES-256-GCM + XChaCha20-Poly1305</b> (100% compatível com vídeos antigos).
+          </div>
+          <p class="muted sm-txt">Alterar a senha mestra ou o Arquivo-Chave (2º fator anti-IA) re-criptografa apenas a chave DEK local — <b>você não precisa re-enviar nenhum vídeo já salvo!</b></p>
+          <label>Senha Atual</label>
+          <input type="password" id="sec-cur-pass" placeholder="Digite sua senha atual">
+          <div id="sec-cur-kf-wrap" class="hidden" style="margin-top:6px">
+            <label id="sec-cur-kf-label">Arquivo-Chave Atual (obrigatório para autenticar)</label>
+            <div class="row-inline">
+              <input type="text" id="sec-cur-kf-path" placeholder="Caminho do arquivo-chave atual">
+              <button type="button" class="btn sm" id="btn-sec-pick-cur-kf">📁 Escolher</button>
+            </div>
+          </div>
+          <label>Nova Senha Mestra (deixe vazio para manter a mesma senha)</label>
+          <input type="password" id="sec-new-pass" placeholder="Opcional se só for alterar o Arquivo-Chave">
+          <label>🔑 Novo Arquivo-Chave Local (2º Fator Anti-IA — Opcional)</label>
+          <div class="row-inline">
+            <input type="text" id="sec-new-kf-path" placeholder="Deixe vazio para manter atual, ou escolha/gere um novo .ytkey">
+            <button type="button" class="btn sm" id="btn-sec-gen-kf">✨ Gerar .ytkey</button>
+            <button type="button" class="btn sm" id="btn-sec-pick-new-kf">📁</button>
+          </div>
+          <label class="check-row" style="margin-top:6px"><input type="checkbox" id="sec-remove-kf"> Remover Arquivo-Chave (voltar a usar apenas a Senha Mestra)</label>
+          <div class="row-2" style="margin-top:10px">
+            <button class="btn primary" id="btn-change-pass">🔑 Atualizar Senha / Keyfile</button>
+            <button class="btn danger-ghost" id="btn-sec-forget-pass">🗑️ Esquecer Senha Salva</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: TUTORIAL GOOGLE OAUTH COMPLETO -->
+  <div id="modal-oauth-tutorial" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3>📖 Tutorial Completo — Configurar YouTube API (Google OAuth)</h3><button class="btn-mini"
+          data-close>✕</button>
+      </div>
+      <div class="modal-body tutorial-body">
+        <p class="muted sm-txt">Siga estes 6 passos rápidos (100% gratuito) para permitir que o BrightVault envie e gerencie
+          vídeos na sua própria conta do YouTube:</p>
+
+        <div class="tut-step">
+          <div class="tut-num">1</div>
+          <div>
+            <b>Criar um Projeto no Google Cloud</b>
+            <p class="muted sm-txt">Acesse <a href="https://console.cloud.google.com/projectcreate"
+                target="_blank">console.cloud.google.com/projectcreate</a>, dê o nome <code>BrightVault</code> e clique em
+              <b>Criar</b>.
+            </p>
+          </div>
+        </div>
+
+        <div class="tut-step">
+          <div class="tut-num">2</div>
+          <div>
+            <b>Ativar a YouTube Data API v3</b>
+            <p class="muted sm-txt">Com o projeto <code>BrightVault</code> selecionado, acesse <a
+                href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank">Biblioteca →
+                YouTube Data API v3</a> e clique em <b>Ativar (Enable)</b>.</p>
+          </div>
+        </div>
+
+        <div class="tut-step">
+          <div class="tut-num">3</div>
+          <div>
+            <b>Configurar Tela de Permissão / Público-alvo (Google Auth Platform)</b>
+            <p class="muted sm-txt">Vá em <a href="https://console.cloud.google.com/auth/overview"
+                target="_blank">Google Auth Platform → Primeiros passos</a>:<br>
+              • Nome do app: <code>BrightVault</code> · E-mail de suporte: seu Gmail.<br>
+              • Público-alvo (Audience): marque <b>Externo (External)</b> e finalize.</p>
+          </div>
+        </div>
+
+        <div class="tut-step warn-step">
+          <div class="tut-num">4</div>
+          <div>
+            <b>IMPORTANTE — Adicionar seu Gmail em "Usuários de teste" (evita Erro 403!)</b>
+            <p class="muted sm-txt">No menu esquerdo do Google Auth Platform, clique em <b>Público-alvo
+                (Audience)</b>.<br>
+              Role até <b>Usuários de teste (Test users)</b> → clique em <b>+ ADD USERS (+ Adicionar usuários)</b> →
+              digite o <b>seu próprio e-mail do Gmail</b> (o dono do canal do YouTube) e clique em <b>Salvar</b>.<br>
+              <i>Sem este passo, o Google exibe "Erro 403: access_denied — app em fase de testes"!</i>
+            </p>
+          </div>
+        </div>
+
+        <div class="tut-step">
+          <div class="tut-num">5</div>
+          <div>
+            <b>Criar Client ID e Client Secret (App para Computador)</b>
+            <p class="muted sm-txt">Vá em <a href="https://console.cloud.google.com/auth/clients" target="_blank">Google
+                Auth Platform → Clientes (Clients)</a> → clique em <b>+ Criar cliente</b>:<br>
+              • Tipo de aplicativo: <b>App para computador (Desktop app)</b>.<br>
+              • Nome: <code>BrightVault Desktop</code> → clique em <b>Criar</b>.<br>
+              • Copie o <b>ID do cliente (Client ID)</b> e a <b>Chave secreta (Client Secret)</b>.</p>
+          </div>
+        </div>
+
+        <div class="tut-step">
+          <div class="tut-num">6</div>
+          <div>
+            <b>Conectar no BrightVault</b>
+            <p class="muted sm-txt">Cole o Client ID e Client Secret em <b>Configurações → YouTube API</b>, clique em
+              <b>Salvar Credenciais</b> e depois em <b>🔗 Conectar Conta YouTube</b>.<br>
+              Na janela do Google que abrir, quando aparecer <i>"O Google não verificou este app"</i>, clique em
+              <b>Avançado → Acessar BrightVault (não seguro)</b> e marque as permissões do YouTube.
+            </p>
+          </div>
+        </div>
+
+        <div class="hint-box">💡 <b>Dica de cota:</b> a API gratuita do YouTube permite ~6 uploads por dia (10.000
+          unidades/dia). Se precisar enviar mais vídeos no mesmo dia, clique em <b>📂 .mp4</b> no vídeo pronto, suba
+          pelo YouTube Studio no navegador e cole o link em <b>🔗 Colar Link</b>!</div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn primary" data-close>Entendi — Voltar às Configurações</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: EXCLUIR PASTA -->
+  <div id="modal-delete-folder" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>🗑️ Excluir Pasta</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="del-folder-id">
+        <div id="del-folder-desc" class="hint-box"></div>
+        <label class="check-row"><input type="radio" name="del-folder-mode" value="recursive" checked> <b>Excluir pasta,
+            subpastas e TODOS os arquivos dentro dela</b></label>
+        <label class="check-row"><input type="radio" name="del-folder-mode" value="move_up"> Apenas apagar a pasta
+          (mover arquivos e subpastas para a pasta pai)</label>
+        <label class="check-row" style="margin-top:10px"><input type="checkbox" id="del-folder-yt"> Também deletar do
+          YouTube os vídeos que ficarem completamente vazios (requer API conectada)</label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancelar</button>
+        <button class="btn danger-ghost" id="btn-confirm-delete-folder" style="border-color:var(--danger)">🗑️ Confirmar
+          Exclusão</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: MEUS VÍDEOS (LISTA COMPLETA, CADEIAS DE ATUALIZAÇÃO, PRIVACIDADE, DESASSOCIAR E DELETAR) -->
+  <div id="modal-my-videos" class="modal hidden">
+    <div class="modal-card upload-xl">
+      <div class="modal-head">
+        <h3>🎬 Meus Vídeos &amp; Cadeias de Atualização</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="myvid-toolbar">
+          <div class="tabs sm" style="border:none;padding:0">
+            <button type="button" class="tab active" data-myvid-filter="all">Todos (<span id="mv-cnt-all">0</span>)</button>
+            <button type="button" class="tab" data-myvid-filter="pending">⏳ Pendentes (<span id="mv-cnt-pending">0</span>)</button>
+            <button type="button" class="tab" data-myvid-filter="sent">✅ Enviados (<span id="mv-cnt-sent">0</span>)</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn sm" id="btn-mv-reconnect-yt" title="Renovar conexão OAuth com a API do YouTube">🔄 Reconectar YouTube</button>
+            <button type="button" class="btn primary sm" id="btn-mv-upload-all">🚀 Enviar Todos Pendentes</button>
+          </div>
+        </div>
+        <div id="my-videos-list" class="myvid-list"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GERENCIAR PASTA (RENOMEAR, PASTA MÃE, CHAVE, COMPARTILHAR E EXCLUIR) -->
+  <div id="modal-folder-props" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h3 id="fp-modal-title">✏️ Gerenciar Pasta</h3><button class="btn-mini" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="fp-folder-id">
+        <div id="fp-stats" class="hint-box">Carregando propriedades da pasta...</div>
+
+        <div id="fp-manage-section" class="set-group" style="margin-top:10px">
+          <div class="set-group-title">✏️ Renomear &amp; Hierarquia da Pasta</div>
+          <label>Nome da Pasta</label>
+          <div class="row-inline">
+            <input type="text" id="fp-rename-input" placeholder="Nome da pasta" style="flex:1">
+            <button type="button" class="btn primary sm" id="btn-fp-rename-save">💾 Renomear</button>
+          </div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <label>📂 Criar Pasta Mãe (coloca esta pasta dentro de uma nova pasta acima dela)</label>
+            <div class="row-inline">
+              <input type="text" id="fp-wrap-parent-name" placeholder="Ex: Arquivos 2026 (nova Pasta Mãe)" style="flex:1">
+              <button type="button" class="btn sm" id="btn-fp-wrap-parent">📂 Criar Pasta Mãe</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="set-group" style="margin-top:10px">
+          <div class="set-group-title">🔐 Chave Criptográfica Exclusiva desta Pasta</div>
+          <p class="muted sm-txt">Cada pasta gera automaticamente sua própria chave AES-256 independente. Você não precisa decorá-la: seu cofre guarda todas as chaves e sua <b>Senha Mestra</b> abre automaticamente qualquer vídeo que você criou.</p>
+          <div class="row-inline">
+            <input type="password" id="fp-key-input" readonly style="flex:1;font-family:Consolas,monospace;font-size:12px">
+            <button type="button" class="btn sm" id="btn-fp-toggle-key">👁️ Revelar</button>
+            <button type="button" class="btn sm" id="btn-fp-copy-key">📋 Copiar Chave</button>
+          </div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">🔗 Compartilhar Pasta (Código do Momento Atual)</div>
+          <p class="muted sm-txt">Gera um código compacto (<code>BVFOLDER1:...</code>) contendo os <b>links do YouTube</b> e as <b>chaves exclusivas</b> apenas dos arquivos que estão nesta pasta neste momento. Quem receber o código pode baixar tudo em <b>🌐 Download Público → Código de Pasta</b> sem acessar seu cofre nem outras pastas.</p>
+          <label class="check-row" style="margin:6px 0"><input type="checkbox" id="fp-include-sub" checked> Incluir subpastas dentro desta pasta</label>
+          <button type="button" class="btn primary full" id="btn-fp-gen-code">🔗 Gerar Código da Pasta (Momento Atual)</button>
+          <div id="fp-share-warnings" class="hidden" style="margin-top:8px"></div>
+          <div id="fp-share-box" class="hidden" style="margin-top:8px">
+            <label>Código Gerado (copie e envie para quem deseja compartilhar)</label>
+            <textarea id="fp-share-code" rows="4" readonly style="font-family:Consolas,monospace;font-size:11.5px"></textarea>
+            <div class="row-inline" style="margin-top:6px;justify-content:space-between;align-items:center">
+              <span id="fp-share-meta" class="muted sm-txt" style="margin:0"></span>
+              <button type="button" class="btn primary sm" id="btn-fp-copy-code">📋 Copiar Código</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="fp-delete-section" class="set-group" style="margin-bottom:0;border-color:rgba(248,113,113,.4)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <strong style="color:var(--danger);font-size:12.5px">🗑️ Zona de Exclusão</strong>
+              <div class="muted" style="font-size:11.5px">Apagar esta pasta (com opção de remover arquivos ou mover para a pasta pai).</div>
+            </div>
+            <button type="button" class="btn danger-ghost sm" id="btn-fp-delete-folder" style="border-color:var(--danger)">🗑️ Excluir Pasta</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: POPUP DE CONFIRMAÇÃO (SOBREPÕE OUTROS MODAIS) -->
+  <div id="modal-confirm" class="modal-overlay-top hidden">
+    <div class="modal-card" style="max-width:480px">
+      <div class="modal-head">
+        <h3 id="confirm-title">⚠️ Confirmar Ação</h3>
+        <button type="button" class="btn-mini" id="btn-confirm-x">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="confirm-desc" class="hint-box" style="margin-top:0"></div>
+        <div id="confirm-options" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" id="btn-confirm-cancel">Cancelar</button>
+        <button type="button" class="btn danger-ghost" id="btn-confirm-ok" style="border-color:var(--danger)">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIGHTBOX -->
+  <div id="lightbox" class="modal hidden">
+    <img id="lightbox-img" alt="Preview">
+  </div>
+
+  <!-- MODAL EXPANDIDO DE PRÉVIA HD (SOBREPÕE O MODAL DE UPLOAD SEM FECHÁ-LO) -->
+  <div id="modal-preview-expand" class="modal-overlay-top hidden">
+    <div class="preview-expand-card">
+      <div class="modal-head">
+        <h3 id="preview-expand-title">🔍 Prévia em Alta Definição</h3>
+        <button type="button" class="btn-mini" id="btn-close-preview-expand" title="Fechar (Esc)">✕</button>
+      </div>
+      <div class="preview-expand-body">
+        <img id="preview-expand-img" alt="Prévia animada ampliada em HD">
+        <div id="preview-expand-caption" class="muted sm-txt" style="margin-top:8px;margin-bottom:0;text-align:center"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTEXT MENU (BOTÃO DIREITO EM ARQUIVOS OU NO BOTÃO ABRIR) -->
+  <div id="file-context-menu" class="ctx-menu hidden" role="menu"></div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+
+</html>

@@ -2,12 +2,40 @@
   <img src="assets/brightweb.png" alt="BrightWeb Logo" width="128" />
 </p>
 
-<h1 align="center">BrightWeb v0.7</h1>
+<h1 align="center">BrightWeb v0.701</h1>
 
 <p align="center">
-  <strong>Navegador descentralizado e publicador de sites estáticos hospedados em vídeo (protocolo <code>btweb://</code>)</strong><br/>
-  Executável único para Windows · Streaming Multi-Vídeo (Shards) · Áudio Integrado · Atualização Automática
+  <strong>Navegador experimental e publicador de sites estáticos em vídeo óptico (protocolo <code>btweb://</code> · BrightNet/3)</strong><br/>
+  Executável único para Windows · Streaming Online Direto por Camadas · Agenda DNS Local · Sandbox White-Hat
 </p>
+
+---
+
+## 🔬 Intuito Científico e Pesquisa White-Hat
+
+O **BrightWeb** e o **BrightVault** (ecossistema **BrightNet**) são projetos abertos de pesquisa científica e engenharia experimental dedicados ao estudo da **resistência, integridade e transmissão de dados binários através de canais ruidosos com compressão severa com perdas** — especificamente codecs modernos de vídeo (H.264, VP9 e AV1) sob transcodificação agressiva, redução de bitrate variável (VBR) e subamostragem cromática (`YUV420p`). A investigação abrange teoria da informação aplicada, códigos corretores de erros Reed-Solomon intra-frame e inter-frame (*Cross-Frame RS*), esteganografia óptica resiliente, compressão com dicionários pré-treinados e protocolos de carregamento progressivo inspirados em HTTP/3 e armazenamento endereçável por conteúdo (CAS).
+
+Todo o ecossistema é desenvolvido sob rigorosos princípios **White-Hat**, com código aberto, transparência total e finalidade estritamente educacional e defensiva: o BrightWeb renderiza páginas dentro de um *sandbox* isolado sem `allow-same-origin` e com **CSP Offline ativo por padrão** (impedindo vazamento de IP ou requisições externas não autorizadas), não opera servidores centrais nem mantém listas oficiais de sites de terceiros (a agenda **Minha Lista** é 100% local no dispositivo do usuário), e toda a criptografia (*Argon2id + AES-256-GCM + XChaCha20-Poly1305*) é executada exclusivamente no computador do usuário.
+
+---
+
+## ✨ Novidades da v0.701
+
+- **📡 Streaming Direto Online + Carregamento Progressivo por Camadas:** o BrightWeb agora "assiste" ao vídeo online em tempo real (sem gravar o vídeo no disco), abrindo a **Camada 0** (`index.html`, CSS e JS críticos) ao vivo enquanto imagens e subpáginas chegam em segundo plano — com fallback automático para `yt-dlp` paralelo (`-N 8`).
+- **🚀 Protocolos BrightNet/3:**
+  - **Zero *Head-of-Line Blocking* (estilo HTTP/3):** arquivos em frames posteriores abrem imediatamente mesmo se um frame anterior falhou e aguarda reparo pelo Cross-Frame RS.
+  - **Promoção automática de *Critical Path* do HTML:** analisa `<link>`, `<script>` e `<img>` do `index.html` e coloca recursos críticos (mesmo em subpastas) nos primeiros frames.
+  - **Dicionário Web Zstd embutido (`WebDictV1`, estilo Brotli):** reduz HTML/CSS/JS/SVG/JSON em 15% a 45%, mantendo 100% de retrocompatibilidade.
+  - **Cache Local por SHA-256 (CAS / ETag):** revisitas e arquivos compartilhados carregam em **0 ms** direto do cache verificado (modo `cas-instant`).
+- **📒 Agenda DNS Local — `Minha Lista` (com pasta dedicada `🏠 Meus Sites`):**
+  - Organize sites em **pastas, subpastas** ou **site dentro de site** (sem precisar criar pasta), reordene com `↑`/`↓` ou arraste e solte (**Drag-and-Drop**).
+  - Resolução DNS local (`btweb://meu-alias` ou `btweb://meu-alias/pagina.html`) com preenchimento automático de senha salva.
+  - Modal **Editar** completo: renomear, deletar, favoritar, **ver e copiar senha(s)**, **ver, copiar e clicar no link do YouTube/origem**.
+  - **Importar e Exportar:** exporte `.json` (escolhendo incluir ou omitir senhas) e importe de `.json`, `.csv` ou links públicos (Google Sheets, Google Docs, GitHub Raw).
+- **📦 Estúdio de Publicação Completo + Barra Inferior em 2º Plano:**
+  - Interface ampla em 2 colunas no padrão do BrightVault com prévia animada GIF, 4 predefinições Web, 5 barras calibradas (incluindo detecção real de imagem estática no fundo), otimização WebP Lossless para PNGs, estúdio de música generativa com prévia de áudio, **Blindagem Cross-Frame RS** e **Duração Mandatória** (Site / Vídeo Base / Áudio) com aviso de capacidade insuficiente.
+  - Ao gerar o vídeo, o modal fecha e o progresso segue na **barra inferior** com **cancelamento real imediato** (encerra o FFmpeg sem travar o programa!) e botão rápido **🏠 Salvar em Meus Sites**.
+- **🔌 Estabilidade em Segundo Plano (SSE `/api/events`):** conexão SSE persistente impede que o processo local feche quando a janela fica minimizada por muito tempo.
 
 ---
 
@@ -19,29 +47,7 @@ Você **não precisa instalar Go, Python nem dependências manualmente**:
 2. Dê **duplo clique em `BrightWeb.exe`**.
 3. O BrightWeb inicia seu motor local seguro (`127.0.0.1`) e abre automaticamente o navegador desktop com suporte nativo ao protocolo **`btweb://`**.
 
-> **FFmpeg e yt-dlp:** para manter o executável leve, `ffmpeg` e `yt-dlp` não são embutidos no `.exe`. Se ainda não estiverem instalados, o BrightWeb baixa/configura automaticamente ou usa o que já estiver em `%LOCALAPPDATA%\YTCloud\bin` ou no `PATH`.
-
----
-
-## Principais Recursos
-
-- **Protocolo `btweb://` (compatível também com `ytweb://`):**
-  - Abra sites completos (HTML, CSS, JS, imagens, fontes, áudio) diretamente de links do YouTube ou arquivos `.mp4` locais — públicos ou criptografados com senha.
-  - Suporte a **carregamento paralelo Multi-Vídeo (Shards)** para abrir páginas e mídias rapidamente.
-- **Publicador de Sites Integrado:**
-  - Empacote qualquer pasta de site estático em vídeo óptico pronto para o YouTube (vídeo único ou dividido em múltiplos shards paralelos).
-  - Modos visuais artísticos/stealth (*Julia-Turing*, *Mandelbrot*, *Stealth Stars*, vídeo base personalizado ou dados puros).
-  - **🎵 Trilha de Áudio opcional** ao gerar o site:
-    - Sem áudio (silencioso)
-    - Música ambiente generativa (com escolha de estilo, clima e prompt)
-    - Áudio do vídeo base
-    - Arquivo de áudio local (`.mp3`, `.wav`, `.flac`, `.ogg`, `.m4a`, `.aac`)
-- **Histórico, Favoritos e Preferências Persistentes:**
-  - Histórico de navegação, favoritos, tema e idioma são salvos permanentemente em disco entre sessões.
-- **Temas e Idiomas:**
-  - Tema padrão **✨ Noite Brilhante**, além de *Noite*, *Papel*, *Deserto*, *Light*, *Rainbow* e *Crepúsculo*, em **9 idiomas** (PT, EN, ES, RU, FR, IT, JA, AR, ZH).
-- **Atualizações Automáticas:**
-  - Verifica novas versões em `brightbringer/BrightWeb` ao abrir e 1x por dia, com indicador de versão (`v0.7`) na barra de abas e atualização automática em 1 clique.
+> **FFmpeg e yt-dlp:** para manter o executável leve, `ffmpeg` e `yt-dlp` não são embutidos no `.exe`. O BrightWeb usa automaticamente os binários em `%LOCALAPPDATA%\YTCloud\bin` ou no `PATH`.
 
 ---
 

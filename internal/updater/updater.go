@@ -21,7 +21,7 @@ import (
 	"ytcloud/internal/sysutil"
 )
 
-const AppVersion = "0.7"
+const AppVersion = "0.701"
 
 type Status struct {
 	AppName         string `json:"app_name"`
@@ -398,21 +398,71 @@ func NormalizeVersion(v string) string {
 	return v
 }
 
-// CompareVersions compares dotted numeric versions (e.g., "0.8" > "0.7", "0.7.1" > "0.7", "1.0" > "0.9").
+// CompareVersions compares decimal/dotted numeric versions where the minor segment is compared
+// fractionally so decimal increments (+0.001) sort naturally:
+//   "0.7" == "0.700" < "0.701" < "0.702" < "0.71" < "0.8" < "1.0"
+// while also preserving 3-part patch ordering ("0.7.1" > "0.7").
 func CompareVersions(a, b string) int {
-	pa := parseVerParts(NormalizeVersion(a))
-	pb := parseVerParts(NormalizeVersion(b))
-	n := len(pa)
-	if len(pb) > n {
-		n = len(pb)
+	sa := parseVerSegs(NormalizeVersion(a))
+	sb := parseVerSegs(NormalizeVersion(b))
+	if len(sa) == 0 && len(sb) == 0 {
+		return 0
 	}
-	for i := 0; i < n; i++ {
-		va, vb := 0, 0
-		if i < len(pa) {
-			va = pa[i]
+
+	// Segment 0 (major): integer comparison
+	majA, majB := 0, 0
+	if len(sa) > 0 {
+		majA, _ = strconv.Atoi(sa[0])
+	}
+	if len(sb) > 0 {
+		majB, _ = strconv.Atoi(sb[0])
+	}
+	if majA > majB {
+		return 1
+	}
+	if majA < majB {
+		return -1
+	}
+
+	// Segment 1 (minor): fractional decimal comparison (right-padded with '0', so "0.7"=="0.700" < "0.701" < "0.8")
+	minA, minB := "0", "0"
+	if len(sa) > 1 && sa[1] != "" {
+		minA = sa[1]
+	}
+	if len(sb) > 1 && sb[1] != "" {
+		minB = sb[1]
+	}
+	maxLen := len(minA)
+	if len(minB) > maxLen {
+		maxLen = len(minB)
+	}
+	padRight := func(s string, n int) string {
+		if len(s) >= n {
+			return s
 		}
-		if i < len(pb) {
-			vb = pb[i]
+		return s + strings.Repeat("0", n-len(s))
+	}
+	pA := padRight(minA, maxLen)
+	pB := padRight(minB, maxLen)
+	if pA > pB {
+		return 1
+	}
+	if pA < pB {
+		return -1
+	}
+
+	// Remaining segments (patch, etc.): integer comparison
+	n := len(sa)
+	if len(sb) > n {
+		n = len(sb)
+	}
+	for i := 2; i < n; i++ {
+		va, vb := 0, 0
+		if i < len(sa) {
+			va, _ = strconv.Atoi(sa[i])
+		}
+		if i < len(sb) {
+			vb, _ = strconv.Atoi(sb[i])
 		}
 		if va > vb {
 			return 1
@@ -424,15 +474,13 @@ func CompareVersions(a, b string) int {
 	return 0
 }
 
-func parseVerParts(v string) []int {
+func parseVerSegs(v string) []string {
 	if v == "" {
 		return nil
 	}
 	segs := strings.Split(v, ".")
-	out := make([]int, len(segs))
-	for i, s := range segs {
-		n, _ := strconv.Atoi(strings.TrimSpace(s))
-		out[i] = n
+	for i := range segs {
+		segs[i] = strings.TrimSpace(segs[i])
 	}
-	return out
+	return segs
 }

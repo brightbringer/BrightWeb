@@ -135,6 +135,8 @@ func DownloadVideo(opts YtDlpOptions, videoURL, destDir string) (string, error) 
 		"--no-playlist",
 		"--continue",
 		"--part",
+		"--concurrent-fragments", "8",
+		"--http-chunk-size", "10M",
 		"-f", "bestvideo/best",
 		"-o", outTpl,
 	}
@@ -156,6 +158,61 @@ func DownloadVideo(opts YtDlpOptions, videoURL, destDir string) (string, error) 
 		}
 	}
 	return "", errors.New("arquivo baixado pelo yt-dlp não encontrado")
+}
+
+// DirectStreamInfo holds the resolved direct media stream URL and video dimensions for zero-disk online streaming.
+type DirectStreamInfo struct {
+	StreamURL string
+	Width     int
+	Height    int
+	Duration  float64
+	UserAgent string
+}
+
+// ResolveDirectStreamURL uses yt-dlp to resolve the highest-quality direct video stream URL (1080p/2K/4K)
+// without downloading the video to disk — enabling BrightWeb to "watch" and progressively decode sites live!
+func ResolveDirectStreamURL(opts YtDlpOptions, videoURL string) (*DirectStreamInfo, error) {
+	if opts.YtDlpPath == "" {
+		return nil, errors.New("yt-dlp não encontrado")
+	}
+	args := []string{
+		"--no-playlist",
+		"--no-warnings",
+		"-f", "bestvideo[protocol=https]/bestvideo/best",
+		"--print", "%(url)s",
+		"--print", "%(width)s",
+		"--print", "%(height)s",
+		"--print", "%(duration)s",
+	}
+	args = appendYtDlpCommonArgs(args, opts)
+	args = append(args, videoURL)
+
+	cmd := exec.Command(opts.YtDlpPath, args...)
+	sysutil.ApplySubprocessAttrs(cmd, true)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("falha resolvendo stream direto: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 3 {
+		return nil, errors.New("resposta incompleta do yt-dlp para stream direto")
+	}
+	streamURL := strings.TrimSpace(lines[0])
+	if !strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://") {
+		return nil, errors.New("URL de stream direto inválida")
+	}
+	w, _ := strconv.Atoi(strings.TrimSpace(lines[1]))
+	h, _ := strconv.Atoi(strings.TrimSpace(lines[2]))
+	var dur float64
+	if len(lines) >= 4 {
+		dur, _ = strconv.ParseFloat(strings.TrimSpace(lines[3]), 64)
+	}
+	return &DirectStreamInfo{
+		StreamURL: streamURL,
+		Width:     w,
+		Height:    h,
+		Duration:  dur,
+	}, nil
 }
 
 // DownloadManifestPeek downloads ONLY the first `seconds` (default 5s) of a YouTube video
